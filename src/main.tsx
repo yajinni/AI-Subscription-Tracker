@@ -21,6 +21,7 @@ import "./app-shell-polish.css";
 import "./paseo-bridge.css";
 
 const isPaseoBridgeWindow = new URLSearchParams(window.location.search).get("view") === "paseo-bridge";
+document.documentElement.classList.toggle("paseo-bridge-window-root", isPaseoBridgeWindow);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
