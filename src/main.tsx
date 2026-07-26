@@ -1,7 +1,9 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { PaseoBridgeWindow } from "./PaseoBridgeWindow";
 import { installDashboardSummaryPolish } from "./dashboard-summary-polish";
+import { installPaseoIntegrationControl } from "./paseo-integration-control";
 import { installSidebarResize } from "./sidebar-resize";
 import { installSidebarUpdateControl } from "./sidebar-update-control";
 import "./styles.css";
@@ -16,13 +18,19 @@ import "./provider-icon-fixes.css";
 import "./sidebar-resize.css";
 import "./dashboard-typography.css";
 import "./app-shell-polish.css";
+import "./paseo-bridge.css";
+
+const isPaseoBridgeWindow = new URLSearchParams(window.location.search).get("view") === "paseo-bridge";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    {isPaseoBridgeWindow ? <PaseoBridgeWindow /> : <App />}
   </StrictMode>,
 );
 
-installSidebarResize();
-installSidebarUpdateControl();
-installDashboardSummaryPolish();
+if (!isPaseoBridgeWindow) {
+  installSidebarResize();
+  installSidebarUpdateControl();
+  installDashboardSummaryPolish();
+  installPaseoIntegrationControl();
+}
