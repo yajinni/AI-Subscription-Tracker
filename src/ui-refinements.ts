@@ -16,9 +16,13 @@ function refineHeader(card: HTMLElement): void {
   const plan = card.querySelector<HTMLElement>(".account-plan-badge");
   if (nameRow && plan?.textContent?.trim()) {
     nameRow.dataset.plan = plan.textContent.trim();
-  } else {
-    delete nameRow?.dataset.plan;
+  } else if (nameRow) {
+    delete nameRow.dataset.plan;
   }
+
+  const remove = Array.from(card.querySelectorAll<HTMLButtonElement>(".account-card-header-actions button"))
+    .find((button) => button.title === "Remove this account");
+  remove?.classList.toggle("showing-spinner", Boolean(remove.querySelector(".mini-spinner")));
 }
 
 function refineMetric(metric: HTMLElement, provider: CardProvider): void {
