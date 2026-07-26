@@ -1,4 +1,4 @@
-import { getOpenCodeEmailByLabel, moveOpenCodeEmailLabel } from "./opencode-account-email";
+import { renameOpenCodeEmailRecord, resolveOpenCodeEmailRecord } from "./opencode-account-email";
 
 type CardProvider = "openai" | "anthropic" | "antigravity" | "opencode_go";
 
@@ -57,20 +57,6 @@ function refineCredits(card: HTMLElement, provider: CardProvider): void {
   }
 }
 
-function refineOpenCodeEmail(card: HTMLElement): void {
-  const name = card.querySelector<HTMLElement>(".account-card-name-row h2")?.textContent?.trim();
-  const subtitle = card.querySelector<HTMLElement>(".account-card-identity > p");
-  if (!name || !subtitle) return;
-
-  const previousLabel = card.dataset.emailLabel;
-  const email = previousLabel && previousLabel !== name
-    ? moveOpenCodeEmailLabel(previousLabel, name)
-    : getOpenCodeEmailByLabel(name);
-
-  card.dataset.emailLabel = name;
-  if (email && subtitle.textContent !== email) subtitle.textContent = email;
-}
-
 function refineAccountCard(card: HTMLElement): void {
   const provider = cardProvider(card);
   if (!provider) return;
@@ -80,13 +66,29 @@ function refineAccountCard(card: HTMLElement): void {
     refineMetric(metric, provider);
   }
   refineCredits(card, provider);
-  if (provider === "opencode_go") refineOpenCodeEmail(card);
+}
+
+function refineOpenCodeEmails(cards: HTMLElement[]): void {
+  const usedAccountIds = new Set<string>();
+  for (const card of cards.filter((candidate) => candidate.dataset.provider === "opencode_go")) {
+    const name = card.querySelector<HTMLElement>(".account-card-name-row h2")?.textContent?.trim();
+    const subtitle = card.querySelector<HTMLElement>(".account-card-identity > p");
+    if (!name || !subtitle) continue;
+
+    const record = resolveOpenCodeEmailRecord(name, usedAccountIds);
+    if (!record) continue;
+
+    usedAccountIds.add(record.accountId);
+    card.dataset.emailAccountId = record.accountId;
+    renameOpenCodeEmailRecord(record.accountId, name);
+    if (subtitle.textContent !== record.email) subtitle.textContent = record.email;
+  }
 }
 
 function applyRefinements(): void {
-  for (const card of Array.from(document.querySelectorAll<HTMLElement>(".provider-account-card"))) {
-    refineAccountCard(card);
-  }
+  const cards = Array.from(document.querySelectorAll<HTMLElement>(".provider-account-card"));
+  for (const card of cards) refineAccountCard(card);
+  refineOpenCodeEmails(cards);
 }
 
 export function installUiRefinements(): void {
