@@ -4,7 +4,6 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { PaseoBridgeWindow } from "./PaseoBridgeWindow";
 import { installDashboardSummaryPolish } from "./dashboard-summary-polish";
-import { installPaseoIntegrationControl } from "./paseo-integration-control";
 import { installSidebarResize } from "./sidebar-resize";
 import { installSidebarUpdateControl } from "./sidebar-update-control";
 import "./styles.css";
@@ -34,5 +33,4 @@ if (!isPaseoBridgeWindow) {
   installSidebarResize();
   installSidebarUpdateControl();
   installDashboardSummaryPolish();
-  installPaseoIntegrationControl();
 }
