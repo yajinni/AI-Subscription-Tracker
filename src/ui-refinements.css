@@ -1,0 +1,72 @@
+.provider-openai .provider-icon-image {
+  filter: brightness(0) invert(1);
+}
+
+.provider-summary-track > span,
+.account-metric-track > span,
+.progress-fill,
+.progress-fill.warning,
+.progress-fill.danger,
+.progress-fill.neutral {
+  background: var(--obsidian-purple-strong, #a078ff) !important;
+}
+
+.account-card-name-row .account-plan-badge {
+  order: 4;
+}
+
+.account-card-header-actions {
+  gap: 10px;
+}
+
+.account-card-action {
+  width: 24px !important;
+  height: 24px !important;
+  padding: 2px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+}
+
+.account-card-action:hover:not(:disabled) {
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.account-card-action.remove-action:hover:not(:disabled) {
+  color: #ffb4ab;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+.metric-heading .metric-window-pill {
+  display: none;
+}
+
+.account-usage-metric > .metric-window-pill {
+  display: inline-flex;
+  width: fit-content;
+  margin: 0 0 8px;
+  padding: 2px 7px;
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.92);
+  background: transparent;
+}
+
+.provider-account-card[data-provider="openai"] .account-credit-metric > strong {
+  margin-bottom: 0;
+}
+
+.sidebar-footer > span {
+  display: none !important;
+}
+
+.notification-only-modal .modal-kicker {
+  display: block;
+  margin-bottom: 14px;
+  transform: translateY(-4px);
+}
+
+.notification-only-modal .alert-settings-heading {
+  margin-top: 0;
+}
