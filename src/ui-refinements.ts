@@ -1,3 +1,5 @@
+import { getOpenCodeEmailByLabel, moveOpenCodeEmailLabel } from "./opencode-account-email";
+
 const TRASH_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5" /></svg>`;
 
 type CardProvider = "openai" | "anthropic" | "antigravity" | "opencode_go";
@@ -81,6 +83,20 @@ function refineCredits(card: HTMLElement, provider: CardProvider): void {
   }
 }
 
+function refineOpenCodeEmail(card: HTMLElement): void {
+  const name = card.querySelector<HTMLElement>(".account-card-name-row h2")?.textContent?.trim();
+  const subtitle = card.querySelector<HTMLElement>(".account-card-identity > p");
+  if (!name || !subtitle) return;
+
+  const previousLabel = card.dataset.emailLabel;
+  const email = previousLabel && previousLabel !== name
+    ? moveOpenCodeEmailLabel(previousLabel, name)
+    : getOpenCodeEmailByLabel(name);
+
+  card.dataset.emailLabel = name;
+  if (email && subtitle.textContent !== email) subtitle.textContent = email;
+}
+
 function refineAccountCard(card: HTMLElement): void {
   const provider = cardProvider(card);
   if (!provider) return;
@@ -90,6 +106,7 @@ function refineAccountCard(card: HTMLElement): void {
     refineMetric(metric, provider);
   }
   refineCredits(card, provider);
+  if (provider === "opencode_go") refineOpenCodeEmail(card);
 }
 
 function refineUpdateControl(): void {
