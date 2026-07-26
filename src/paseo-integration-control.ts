@@ -4,8 +4,7 @@ import type { BridgeInfo } from "./types";
 let attachFrame: number | null = null;
 
 function buildIntegrationView(view: HTMLElement): void {
-  if (view.dataset.paseoIntegrationControl === "true") return;
-  view.dataset.paseoIntegrationControl = "true";
+  if (view.querySelector("[data-paseo-integration-root='true']")) return;
   view.replaceChildren();
 
   const header = document.createElement("header");
@@ -23,6 +22,7 @@ function buildIntegrationView(view: HTMLElement): void {
 
   const card = document.createElement("section");
   card.className = "settings-card paseo-integration-card";
+  card.dataset.paseoIntegrationRoot = "true";
   const row = document.createElement("div");
   row.className = "settings-row paseo-integration-row";
 
