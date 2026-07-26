@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
@@ -20,7 +21,7 @@ import "./dashboard-typography.css";
 import "./app-shell-polish.css";
 import "./paseo-bridge.css";
 
-const isPaseoBridgeWindow = new URLSearchParams(window.location.search).get("view") === "paseo-bridge";
+const isPaseoBridgeWindow = getCurrentWindow().label === "paseo-bridge";
 document.documentElement.classList.toggle("paseo-bridge-window-root", isPaseoBridgeWindow);
 
 createRoot(document.getElementById("root")!).render(
