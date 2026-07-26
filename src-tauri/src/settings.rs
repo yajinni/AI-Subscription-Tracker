@@ -65,6 +65,7 @@ impl SettingsStore {
         if !valid_refresh_minutes(settings.account_refresh_minutes) {
             settings.account_refresh_minutes = DEFAULT_ACCOUNT_REFRESH_MINUTES;
         }
+        settings.version = settings_version();
 
         Ok(Self {
             path,
@@ -132,7 +133,7 @@ impl SettingsStore {
         next.paseo_bridge_enabled = enabled;
         self.persist(&next)?;
         *settings = next;
-        self.bridge_state_changed.notify_waiters();
+        self.bridge_state_changed.notify_one();
 
         Ok(AppSettings {
             account_refresh_minutes: settings.account_refresh_minutes,
