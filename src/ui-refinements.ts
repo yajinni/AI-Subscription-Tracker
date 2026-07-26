@@ -1,4 +1,8 @@
-import { renameOpenCodeEmailRecord, resolveOpenCodeEmailRecord } from "./opencode-account-email";
+import {
+  getOpenCodeEmailRecord,
+  renameOpenCodeEmailRecord,
+  resolveOpenCodeEmailRecord,
+} from "./opencode-account-email";
 
 type CardProvider = "openai" | "anthropic" | "antigravity" | "opencode_go";
 
@@ -70,12 +74,18 @@ function refineAccountCard(card: HTMLElement): void {
 
 function refineOpenCodeEmails(cards: HTMLElement[]): void {
   const usedAccountIds = new Set<string>();
-  for (const card of cards.filter((candidate) => candidate.dataset.provider === "opencode_go")) {
+  const openCodeCards = cards.filter((candidate) => candidate.dataset.provider === "opencode_go");
+
+  for (const card of [...openCodeCards].reverse()) {
     const name = card.querySelector<HTMLElement>(".account-card-name-row h2")?.textContent?.trim();
     const subtitle = card.querySelector<HTMLElement>(".account-card-identity > p");
     if (!name || !subtitle) continue;
 
-    const record = resolveOpenCodeEmailRecord(name, usedAccountIds);
+    const assignedId = card.dataset.emailAccountId;
+    const assignedRecord = assignedId ? getOpenCodeEmailRecord(assignedId) : null;
+    const record = assignedRecord && !usedAccountIds.has(assignedRecord.accountId)
+      ? assignedRecord
+      : resolveOpenCodeEmailRecord(name, usedAccountIds);
     if (!record) continue;
 
     usedAccountIds.add(record.accountId);
