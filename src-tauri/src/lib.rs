@@ -119,7 +119,7 @@ async fn set_paseo_bridge_enabled(
 }
 
 #[tauri::command]
-fn open_paseo_bridge_window(
+async fn open_paseo_bridge_window(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), String> {
@@ -137,7 +137,7 @@ fn open_paseo_bridge_window(
     let mut builder = WebviewWindowBuilder::new(
         &app,
         "paseo-bridge",
-        WebviewUrl::App("index.html?view=paseo-bridge".into()),
+        WebviewUrl::App("index.html".into()),
     )
     .title("Paseo Bridge")
     .inner_size(780.0, 760.0)
