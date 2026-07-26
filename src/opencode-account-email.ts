@@ -48,13 +48,18 @@ export function saveOpenCodeAccountEmail(accountId: string, label: string, email
   saveRecords(records);
 }
 
+export function getOpenCodeEmailRecord(accountId: string): OpenCodeEmailRecord | null {
+  return loadRecords().find((record) => record.accountId === accountId) ?? null;
+}
+
 export function resolveOpenCodeEmailRecord(
   label: string,
   usedAccountIds: ReadonlySet<string>,
 ): OpenCodeEmailRecord | null {
   const records = loadRecords();
-  return records.find((record) => !usedAccountIds.has(record.accountId) && record.label === label)
-    ?? records.find((record) => !usedAccountIds.has(record.accountId))
+  return [...records]
+    .reverse()
+    .find((record) => !usedAccountIds.has(record.accountId) && record.label === label)
     ?? null;
 }
 
