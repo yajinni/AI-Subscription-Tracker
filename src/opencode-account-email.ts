@@ -1,40 +1,67 @@
 import { setCustomAccountEmail } from "./account-metadata";
 
-const LABEL_EMAIL_PREFIX = "ai-subscription-tracker:opencode-email-by-label:";
+const REGISTRY_KEY = "ai-subscription-tracker:opencode-account-emails";
 
-function labelKey(label: string): string {
-  return `${LABEL_EMAIL_PREFIX}${label.trim().toLocaleLowerCase()}`;
+type OpenCodeEmailRecord = {
+  accountId: string;
+  label: string;
+  email: string;
+};
+
+function loadRecords(): OpenCodeEmailRecord[] {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(REGISTRY_KEY) ?? "[]") as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is OpenCodeEmailRecord => Boolean(
+      entry
+      && typeof entry === "object"
+      && typeof (entry as OpenCodeEmailRecord).accountId === "string"
+      && typeof (entry as OpenCodeEmailRecord).label === "string"
+      && typeof (entry as OpenCodeEmailRecord).email === "string",
+    ));
+  } catch {
+    return [];
+  }
 }
 
-export function saveOpenCodeAccountEmail(accountId: string, label: string, email: string): void {
-  const normalized = email.trim();
-  setCustomAccountEmail(accountId, normalized);
+function saveRecords(records: OpenCodeEmailRecord[]): void {
   try {
-    if (normalized) window.localStorage.setItem(labelKey(label), normalized);
+    window.localStorage.setItem(REGISTRY_KEY, JSON.stringify(records));
   } catch {
     // The account remains usable if WebView storage is unavailable.
   }
 }
 
-export function getOpenCodeEmailByLabel(label: string): string | null {
-  try {
-    const value = window.localStorage.getItem(labelKey(label))?.trim();
-    return value || null;
-  } catch {
-    return null;
+export function saveOpenCodeAccountEmail(accountId: string, label: string, email: string): void {
+  const normalized = email.trim();
+  setCustomAccountEmail(accountId, normalized);
+  if (!normalized) return;
+
+  const records = loadRecords();
+  const existing = records.find((record) => record.accountId === accountId);
+  if (existing) {
+    existing.label = label.trim();
+    existing.email = normalized;
+  } else {
+    records.push({ accountId, label: label.trim(), email: normalized });
   }
+  saveRecords(records);
 }
 
-export function moveOpenCodeEmailLabel(previousLabel: string, nextLabel: string): string | null {
-  const email = getOpenCodeEmailByLabel(previousLabel);
-  if (!email) return getOpenCodeEmailByLabel(nextLabel);
-  try {
-    window.localStorage.setItem(labelKey(nextLabel), email);
-    if (previousLabel.trim().toLocaleLowerCase() !== nextLabel.trim().toLocaleLowerCase()) {
-      window.localStorage.removeItem(labelKey(previousLabel));
-    }
-  } catch {
-    // Keep displaying the email from the current render even if storage is unavailable.
-  }
-  return email;
+export function resolveOpenCodeEmailRecord(
+  label: string,
+  usedAccountIds: ReadonlySet<string>,
+): OpenCodeEmailRecord | null {
+  const records = loadRecords();
+  return records.find((record) => !usedAccountIds.has(record.accountId) && record.label === label)
+    ?? records.find((record) => !usedAccountIds.has(record.accountId))
+    ?? null;
+}
+
+export function renameOpenCodeEmailRecord(accountId: string, label: string): void {
+  const records = loadRecords();
+  const record = records.find((candidate) => candidate.accountId === accountId);
+  if (!record || record.label === label) return;
+  record.label = label;
+  saveRecords(records);
 }
