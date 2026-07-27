@@ -24,9 +24,12 @@ jobs:
       - name: Rebuild patch script
         shell: bash
         run: |
+          wc -c scripts/.google-ai-studio-cloud-usage.patch.*
           cat scripts/.google-ai-studio-cloud-usage.patch.* | base64 --decode > scripts/apply-google-ai-studio-cloud-usage.py
+          wc -c scripts/apply-google-ai-studio-cloud-usage.py
+          sha256sum scripts/apply-google-ai-studio-cloud-usage.py
+          test "$(wc -c < scripts/apply-google-ai-studio-cloud-usage.py)" = "78835"
           python -m py_compile scripts/apply-google-ai-studio-cloud-usage.py
-          test "$(sha256sum scripts/apply-google-ai-studio-cloud-usage.py | awk '{print $1}')" = "164a49e4ae1b7dd4a31b8cbb2b57b3aa1e224fc43b5b687ed8e25ececacf997b"
       - name: Apply patch
         run: python scripts/apply-google-ai-studio-cloud-usage.py
       - name: Format Rust
