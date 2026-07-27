@@ -104,7 +104,21 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
       - name: Frontend type-check
-        run: npm run check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set +e
+          npm run check > /tmp/frontend-check.log 2>&1
+          result=$?
+          set -e
+          if [ "$result" -ne 0 ]; then
+            { echo '## Frontend type-check failure'; echo; echo '```text'; tail -n 160 /tmp/frontend-check.log; echo '```'; } > /tmp/pr-body.md
+            gh pr edit "$PR_NUMBER" --body-file /tmp/pr-body.md || true
+          fi
+          cat /tmp/frontend-check.log
+          exit "$result"
       - name: Frontend production build
         run: npm run build
       - name: Rust tests
