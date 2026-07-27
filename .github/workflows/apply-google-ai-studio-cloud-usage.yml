@@ -25,7 +25,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: Rebuild and correct source-edit script
+      - name: Rebuild resilient source-edit script
         shell: bash
         run: |
           python - <<'PY'
@@ -35,12 +35,36 @@ jobs:
           encoded = "".join(part.read_text(encoding="utf-8").strip() for part in parts)
           source = lzma.decompress(base64.b64decode(encoded, validate=True)).decode("utf-8")
           assert hashlib.sha256(source.encode()).hexdigest() == "164a49e4ae1b7dd4a31b8cbb2b57b3aa1e224fc43b5b687ed8e25ececacf997b"
-          old = "'''             onReconnect={() => props.onReconnect(account)}\\n             onRename={(label) => props.onRename(account, label)}\\n'''"
-          new = "'''            onReconnect={() => props.onReconnect(account)}\\n            onRename={(label) => props.onRename(account, label)}\\n'''"
-          old_result = "'''             onReconnect={() => props.onReconnect(account)}\\n             onConnectGoogleUsage={() => props.onConnectGoogleUsage(account)}\\n             onRename={(label) => props.onRename(account, label)}\\n'''"
-          new_result = "'''            onReconnect={() => props.onReconnect(account)}\\n            onConnectGoogleUsage={() => props.onConnectGoogleUsage(account)}\\n            onRename={(label) => props.onRename(account, label)}\\n'''"
-          assert source.count(old) == 1 and source.count(old_result) == 1
-          source = source.replace(old, new).replace(old_result, new_result)
+          source = source.replace("from pathlib import Path\n", "from pathlib import Path\nimport re\nimport textwrap\n", 1)
+          old_function = '''def replace_once(path: str, old: str, new: str) -> None:
+              content = read(path)
+              count = content.count(old)
+              if count != 1:
+                  raise RuntimeError(f"Expected exactly one match in {path}, found {count}: {old[:120]!r}")
+              write(path, content.replace(old, new, 1))
+          '''
+          new_function = '''def replace_once(path: str, old: str, new: str) -> None:
+              content = read(path)
+              count = content.count(old)
+              if count == 1:
+                  write(path, content.replace(old, new, 1))
+                  return
+              parts = []
+              for line in old.splitlines(keepends=True):
+                  parts.append(r"[ \\t]*" + re.escape(line.lstrip(" \\t")))
+              matches = list(re.finditer("".join(parts), content))
+              if len(matches) != 1:
+                  raise RuntimeError(f"Expected exactly one match in {path}, found {count} exact and {len(matches)} whitespace-flexible: {old[:120]!r}")
+              match = matches[0]
+              first = match.group(0).splitlines()[0]
+              indent = first[: len(first) - len(first.lstrip(" \\t"))]
+              replacement = textwrap.indent(textwrap.dedent(new), indent)
+              write(path, content[: match.start()] + replacement + content[match.end() :])
+          '''
+          old_function = textwrap.dedent(old_function)
+          new_function = textwrap.dedent(new_function)
+          assert source.count(old_function) == 1
+          source = source.replace(old_function, new_function)
           Path("/tmp/apply_google_ai_studio_cloud_usage.py").write_text(source, encoding="utf-8")
           compile(source, "apply_google_ai_studio_cloud_usage.py", "exec")
           PY
