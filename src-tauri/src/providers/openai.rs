@@ -166,11 +166,13 @@ async fn call_usage(
         return Err(ProviderError::Auth);
     }
     if status == StatusCode::FORBIDDEN {
-        return Err(ProviderError::Transient(if body.trim_start().starts_with('<') {
-            "OpenAI returned an HTML access challenge. Cached usage is being kept.".into()
-        } else {
-            "OpenAI denied the usage request. Cached usage is being kept.".into()
-        }));
+        return Err(ProviderError::Transient(
+            if body.trim_start().starts_with('<') {
+                "OpenAI returned an HTML access challenge. Cached usage is being kept.".into()
+            } else {
+                "OpenAI denied the usage request. Cached usage is being kept.".into()
+            },
+        ));
     }
     if status == StatusCode::TOO_MANY_REQUESTS {
         return Err(ProviderError::Transient(match retry_after {
@@ -193,10 +195,7 @@ async fn call_usage(
     })
 }
 
-async fn refresh_secret(
-    app: &AppState,
-    secret: OAuthSecret,
-) -> Result<OAuthSecret, ProviderError> {
+async fn refresh_secret(app: &AppState, secret: OAuthSecret) -> Result<OAuthSecret, ProviderError> {
     let response = app
         .client
         .post(TOKEN_URL)
@@ -259,10 +258,7 @@ fn normalize_window(id: &str, label: &str, raw: &RawWindow) -> UsageWindow {
         used_percent: used,
         remaining_percent: used.map(|value| (100.0 - value).max(0.0)),
         resets_at,
-        window_seconds: raw
-            .limit_window_seconds
-            .as_ref()
-            .and_then(value_as_u64),
+        window_seconds: raw.limit_window_seconds.as_ref().and_then(value_as_u64),
     }
 }
 

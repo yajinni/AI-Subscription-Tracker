@@ -138,7 +138,9 @@ async fn cloud_code_post(
         .json(payload)
         .send()
         .await
-        .map_err(|error| ProviderError::Transient(format!("Antigravity quota request failed: {error}")))?;
+        .map_err(|error| {
+            ProviderError::Transient(format!("Antigravity quota request failed: {error}"))
+        })?;
     let status = response.status();
     let body = response.text().await.map_err(|error| {
         ProviderError::Transient(format!("Unable to read the Antigravity response: {error}"))
@@ -152,14 +154,13 @@ async fn cloud_code_post(
         )));
     }
     serde_json::from_str(&body).map_err(|error| {
-        ProviderError::Transient(format!("Antigravity returned incompatible quota data: {error}"))
+        ProviderError::Transient(format!(
+            "Antigravity returned incompatible quota data: {error}"
+        ))
     })
 }
 
-async fn refresh_secret(
-    app: &AppState,
-    secret: OAuthSecret,
-) -> Result<OAuthSecret, ProviderError> {
+async fn refresh_secret(app: &AppState, secret: OAuthSecret) -> Result<OAuthSecret, ProviderError> {
     let client_secret = String::from_utf8_lossy(CLIENT_SECRET_BYTES).to_string();
     let response = app
         .client
@@ -172,7 +173,9 @@ async fn refresh_secret(
         ])
         .send()
         .await
-        .map_err(|error| ProviderError::Transient(format!("Google token refresh failed: {error}")))?;
+        .map_err(|error| {
+            ProviderError::Transient(format!("Google token refresh failed: {error}"))
+        })?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -204,7 +207,9 @@ async fn fetch_email(app: &AppState, access_token: &str) -> Result<String, Provi
         .bearer_auth(access_token)
         .send()
         .await
-        .map_err(|error| ProviderError::Transient(format!("Google user-info request failed: {error}")))?;
+        .map_err(|error| {
+            ProviderError::Transient(format!("Google user-info request failed: {error}"))
+        })?;
     if response.status() == StatusCode::UNAUTHORIZED || response.status() == StatusCode::FORBIDDEN {
         return Err(ProviderError::Auth);
     }
@@ -214,16 +219,17 @@ async fn fetch_email(app: &AppState, access_token: &str) -> Result<String, Provi
             response.status()
         )));
     }
-    let value: Value = response
-        .json()
-        .await
-        .map_err(|error| ProviderError::Transient(format!("Invalid Google user-info response: {error}")))?;
+    let value: Value = response.json().await.map_err(|error| {
+        ProviderError::Transient(format!("Invalid Google user-info response: {error}"))
+    })?;
     value
         .get("email")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
-        .ok_or_else(|| ProviderError::Transient("Google user info did not contain an email address.".into()))
+        .ok_or_else(|| {
+            ProviderError::Transient("Google user info did not contain an email address.".into())
+        })
 }
 
 fn metadata(duet_project: Option<&str>) -> Value {
@@ -359,7 +365,9 @@ fn parse_available_models(value: &Value) -> Vec<UsageWindow> {
         return windows;
     };
     for (model_id, model) in models {
-        let Some(quota) = model.get("quotaInfo") else { continue };
+        let Some(quota) = model.get("quotaInfo") else {
+            continue;
+        };
         let Some(remaining) = quota.get("remainingFraction").and_then(value_as_f64) else {
             continue;
         };
@@ -397,7 +405,11 @@ fn value_as_f64(value: &Value) -> Option<f64> {
 
 fn classify_id(label: &str) -> String {
     let lower = label.to_ascii_lowercase();
-    if lower.contains("5h") || lower.contains("5 hour") || lower.contains("five hour") || lower.contains("rolling") {
+    if lower.contains("5h")
+        || lower.contains("5 hour")
+        || lower.contains("five hour")
+        || lower.contains("rolling")
+    {
         "five_hour".into()
     } else if lower.contains("week") || lower.contains("7 day") || lower.contains("seven day") {
         "weekly".into()
@@ -432,13 +444,23 @@ fn unique_id(base: &str, ids: &mut HashSet<String>) -> String {
 fn slug(value: &str) -> String {
     let result = value
         .chars()
-        .map(|character| if character.is_ascii_alphanumeric() { character.to_ascii_lowercase() } else { '_' })
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .split('_')
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("_");
-    if result.is_empty() { "quota".into() } else { result }
+    if result.is_empty() {
+        "quota".into()
+    } else {
+        result
+    }
 }
 
 #[cfg(test)]

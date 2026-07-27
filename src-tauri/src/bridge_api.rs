@@ -46,7 +46,8 @@ pub async fn run_controller(app: Arc<AppState>) {
                     Err(error) => {
                         set_runtime(&app, false, Some(format!("Local API stopped: {error}")));
                         if app.settings.paseo_bridge_enabled() {
-                            tokio::time::sleep(std::time::Duration::from_secs(RETRY_DELAY_SECONDS)).await;
+                            tokio::time::sleep(std::time::Duration::from_secs(RETRY_DELAY_SECONDS))
+                                .await;
                         }
                     }
                 }
@@ -105,9 +106,7 @@ async fn usage(State(app): State<Arc<AppState>>, headers: HeaderMap) -> impl Int
                 label: account.label,
                 provider: account.provider,
                 email: account.email,
-                provider_account_id: account
-                    .provider_account_id
-                    .or(account.chatgpt_account_id),
+                provider_account_id: account.provider_account_id.or(account.chatgpt_account_id),
                 plan: account.plan,
                 status: status.into(),
                 source: usage.as_ref().map(|usage| usage.source.clone()),

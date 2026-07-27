@@ -91,8 +91,7 @@ fn account_credential_entry(account_id: &str) -> Result<Entry, StoreError> {
 
 #[cfg(target_os = "macos")]
 fn credential_entry(user: &str) -> Result<Entry, StoreError> {
-    Entry::new(CREDENTIAL_SERVICE, user)
-        .map_err(|error| StoreError::Credential(error.to_string()))
+    Entry::new(CREDENTIAL_SERVICE, user).map_err(|error| StoreError::Credential(error.to_string()))
 }
 
 #[cfg(target_os = "macos")]
@@ -116,9 +115,7 @@ fn parse_credential_manifest(value: &str) -> Result<Option<CredentialManifest>, 
 }
 
 #[cfg(target_os = "macos")]
-fn validate_credential_generation(
-    generation: &CredentialGeneration,
-) -> Result<(), StoreError> {
+fn validate_credential_generation(generation: &CredentialGeneration) -> Result<(), StoreError> {
     if generation.chunks == 0 || generation.chunks > MAX_CREDENTIAL_CHUNKS {
         return Err(StoreError::Invalid(format!(
             "credential manifest contains an invalid chunk count: {}",
@@ -186,8 +183,10 @@ mod tests {
 
     #[test]
     fn ignores_regular_provider_secret_json() {
-        assert!(parse_credential_manifest(r#"{"openai":{"accessToken":"token"}}"#)
-            .unwrap()
-            .is_none());
+        assert!(
+            parse_credential_manifest(r#"{"openai":{"accessToken":"token"}}"#)
+                .unwrap()
+                .is_none()
+        );
     }
 }

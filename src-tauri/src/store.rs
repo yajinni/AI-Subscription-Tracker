@@ -82,7 +82,10 @@ impl AccountStore {
 
     pub fn upsert(&self, account: Account) -> Result<Account, StoreError> {
         let mut accounts = self.accounts.write();
-        if let Some(existing) = accounts.iter_mut().find(|candidate| candidate.id == account.id) {
+        if let Some(existing) = accounts
+            .iter_mut()
+            .find(|candidate| candidate.id == account.id)
+        {
             *existing = account.clone();
         } else {
             accounts.push(account.clone());
@@ -279,8 +282,7 @@ fn credential_chunk_user(account_id: &str, generation: &str, index: usize) -> St
 }
 
 fn credential_entry(user: &str) -> Result<Entry, StoreError> {
-    Entry::new(CREDENTIAL_SERVICE, user)
-        .map_err(|error| StoreError::Credential(error.to_string()))
+    Entry::new(CREDENTIAL_SERVICE, user).map_err(|error| StoreError::Credential(error.to_string()))
 }
 
 fn read_credential_manifest(account_id: &str) -> Result<Option<CredentialManifest>, StoreError> {

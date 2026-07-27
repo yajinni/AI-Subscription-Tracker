@@ -89,7 +89,9 @@ impl SettingsStore {
 
     pub fn set_account_refresh_minutes(&self, minutes: u64) -> Result<AppSettings, String> {
         if !valid_refresh_minutes(minutes) {
-            return Err("Account updates must be between 5 and 60 minutes in 5-minute increments.".into());
+            return Err(
+                "Account updates must be between 5 and 60 minutes in 5-minute increments.".into(),
+            );
         }
 
         let mut settings = self.settings.write();
@@ -146,11 +148,7 @@ impl SettingsStore {
     }
 
     pub fn update_notification_needed(&self, version: &str) -> bool {
-        self.settings
-            .read()
-            .last_notified_update_version
-            .as_deref()
-            != Some(version)
+        self.settings.read().last_notified_update_version.as_deref() != Some(version)
     }
 
     pub fn mark_update_notified(&self, version: &str) -> Result<(), String> {
@@ -194,8 +192,20 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let store = SettingsStore::load(directory.path()).unwrap();
         assert_eq!(store.get().account_refresh_minutes, 5);
-        assert_eq!(store.set_account_refresh_minutes(35).unwrap().account_refresh_minutes, 35);
-        assert_eq!(SettingsStore::load(directory.path()).unwrap().get().account_refresh_minutes, 35);
+        assert_eq!(
+            store
+                .set_account_refresh_minutes(35)
+                .unwrap()
+                .account_refresh_minutes,
+            35
+        );
+        assert_eq!(
+            SettingsStore::load(directory.path())
+                .unwrap()
+                .get()
+                .account_refresh_minutes,
+            35
+        );
     }
 
     #[test]
@@ -212,8 +222,18 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let store = SettingsStore::load(directory.path()).unwrap();
         assert!(!store.get().paseo_bridge_enabled);
-        assert!(store.set_paseo_bridge_enabled(true).unwrap().paseo_bridge_enabled);
-        assert!(SettingsStore::load(directory.path()).unwrap().get().paseo_bridge_enabled);
+        assert!(
+            store
+                .set_paseo_bridge_enabled(true)
+                .unwrap()
+                .paseo_bridge_enabled
+        );
+        assert!(
+            SettingsStore::load(directory.path())
+                .unwrap()
+                .get()
+                .paseo_bridge_enabled
+        );
     }
 
     #[test]
@@ -222,7 +242,9 @@ mod tests {
         let store = SettingsStore::load(directory.path()).unwrap();
         assert!(store.update_notification_needed("0.2.23"));
         store.mark_update_notified("0.2.23").unwrap();
-        assert!(!SettingsStore::load(directory.path()).unwrap().update_notification_needed("0.2.23"));
+        assert!(!SettingsStore::load(directory.path())
+            .unwrap()
+            .update_notification_needed("0.2.23"));
         assert!(store.update_notification_needed("0.2.24"));
     }
 }

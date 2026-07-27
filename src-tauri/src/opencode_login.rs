@@ -1,7 +1,6 @@
 use crate::{
     model::{
-        now_rfc3339, Account, LoginStart, LoginStatus, OpenCodeGoSecret, Provider,
-        ProviderSecret,
+        now_rfc3339, Account, LoginStart, LoginStatus, OpenCodeGoSecret, Provider, ProviderSecret,
     },
     providers,
     state::AppState,
@@ -18,8 +17,8 @@ use std::{
     time::Duration as StdDuration,
 };
 use tauri::{
-    webview::PageLoadEvent, AppHandle, Manager, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder, WindowEvent,
+    webview::PageLoadEvent, AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
 };
 use url::Url;
 use uuid::Uuid;
@@ -158,9 +157,7 @@ pub async fn start_login(
     .incognito(true)
     .devtools(false)
     .initialization_script(CONNECT_BANNER_SCRIPT)
-    .on_navigation(|url| {
-        matches!(url.scheme(), "http" | "https") || url.as_str() == "about:blank"
-    })
+    .on_navigation(|url| matches!(url.scheme(), "http" | "https") || url.as_str() == "about:blank")
     .on_page_load(move |window, payload| {
         if !matches!(payload.event(), PageLoadEvent::Finished) {
             return;
@@ -203,7 +200,9 @@ pub async fn start_login(
                         update_waiting_message(
                             &completion_state,
                             &completion_attempt,
-                            format!("{error} Navigate away from Go, then select Go again to retry."),
+                            format!(
+                                "{error} Navigate away from Go, then select Go again to retry."
+                            ),
                         );
                     }
                 }
@@ -229,10 +228,7 @@ pub async fn start_login(
     let timeout_attempt = attempt_id.clone();
     let timeout_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(StdDuration::from_secs(
-            (LOGIN_TIMEOUT_MINUTES * 60) as u64,
-        ))
-        .await;
+        tokio::time::sleep(StdDuration::from_secs((LOGIN_TIMEOUT_MINUTES * 60) as u64)).await;
         if is_waiting(&timeout_state, &timeout_attempt) {
             fail_if_waiting(
                 &timeout_state,
@@ -263,8 +259,11 @@ pub async fn add_account(
         return providers::google_ai_studio::probe_account(state, label, auth_cookie).await;
     }
     if let Some(payload) = workspace_id.strip_prefix(GOOGLE_AI_STUDIO_WORKSPACE_PREFIX) {
-        let payload = serde_json::from_str::<GoogleAiStudioConnectionPayload>(payload)
-            .map_err(|_| "The Google AI Studio model selection is invalid. Load the models again.".to_string())?;
+        let payload =
+            serde_json::from_str::<GoogleAiStudioConnectionPayload>(payload).map_err(|_| {
+                "The Google AI Studio model selection is invalid. Load the models again."
+                    .to_string()
+            })?;
         return providers::google_ai_studio::add_account(
             state,
             label,
@@ -385,9 +384,7 @@ fn read_auth_cookie_with_retry(window: &WebviewWindow) -> Result<String, String>
         }
 
         if attempt + 1 < COOKIE_CAPTURE_ATTEMPTS {
-            std::thread::sleep(StdDuration::from_millis(
-                COOKIE_CAPTURE_RETRY_DELAY_MS,
-            ));
+            std::thread::sleep(StdDuration::from_millis(COOKIE_CAPTURE_RETRY_DELAY_MS));
         }
     }
 
@@ -423,7 +420,9 @@ fn workspace_id_from_url(url: &Url) -> Option<String> {
         return None;
     }
     let segments = url.path_segments()?.collect::<Vec<_>>();
-    let workspace_index = segments.iter().position(|segment| *segment == "workspace")?;
+    let workspace_index = segments
+        .iter()
+        .position(|segment| *segment == "workspace")?;
     if segments.get(workspace_index + 2).copied() != Some("go") {
         return None;
     }
@@ -481,10 +480,8 @@ mod tests {
         );
         assert_eq!(
             workspace_id_from_url(
-                &Url::parse(
-                    "https://opencode.ai/workspace/mystic-patrol-3ls3t/go/?source=sidebar"
-                )
-                .unwrap()
+                &Url::parse("https://opencode.ai/workspace/mystic-patrol-3ls3t/go/?source=sidebar")
+                    .unwrap()
             ),
             Some("mystic-patrol-3ls3t".into())
         );

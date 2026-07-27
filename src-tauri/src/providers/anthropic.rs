@@ -66,8 +66,20 @@ pub async fn refresh(
     };
 
     let mut windows = Vec::new();
-    push_window(&mut windows, "five_hour", "5 hour", raw.five_hour.as_ref(), Some(18_000));
-    push_window(&mut windows, "weekly", "Weekly", raw.seven_day.as_ref(), Some(604_800));
+    push_window(
+        &mut windows,
+        "five_hour",
+        "5 hour",
+        raw.five_hour.as_ref(),
+        Some(18_000),
+    );
+    push_window(
+        &mut windows,
+        "weekly",
+        "Weekly",
+        raw.seven_day.as_ref(),
+        Some(604_800),
+    );
     push_window(
         &mut windows,
         "sonnet_weekly",
@@ -92,8 +104,14 @@ pub async fn refresh(
     ]
     .into_iter()
     .collect();
-    for (key, value) in raw.other.iter().filter(|(key, _)| !known.contains(key.as_str())) {
-        let Some(object) = value.as_object() else { continue };
+    for (key, value) in raw
+        .other
+        .iter()
+        .filter(|(key, _)| !known.contains(key.as_str()))
+    {
+        let Some(object) = value.as_object() else {
+            continue;
+        };
         let Some(utilization) = object.get("utilization").and_then(value_as_f64) else {
             continue;
         };
@@ -160,10 +178,13 @@ pub async fn refresh(
         .or_else(|| account.plan.clone())
         .or_else(|| Some("Claude subscription".into()));
 
-    let credits_usd = raw.extra_usage.as_ref().and_then(|extra| match (extra.limit_usd, extra.spent_usd) {
-        (Some(limit), Some(spent)) => Some((limit - spent).max(0.0)),
-        _ => None,
-    });
+    let credits_usd =
+        raw.extra_usage
+            .as_ref()
+            .and_then(|extra| match (extra.limit_usd, extra.spent_usd) {
+                (Some(limit), Some(spent)) => Some((limit - spent).max(0.0)),
+                _ => None,
+            });
 
     Ok((
         ProviderUsage {
@@ -188,7 +209,9 @@ async fn call_usage(app: &AppState, secret: &OAuthSecret) -> Result<RawUsage, Pr
         .header("anthropic-beta", OAUTH_BETA)
         .send()
         .await
-        .map_err(|error| ProviderError::Transient(format!("Anthropic usage request failed: {error}")))?;
+        .map_err(|error| {
+            ProviderError::Transient(format!("Anthropic usage request failed: {error}"))
+        })?;
     let status = response.status();
     let retry_after = response
         .headers()
@@ -196,7 +219,9 @@ async fn call_usage(app: &AppState, secret: &OAuthSecret) -> Result<RawUsage, Pr
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
     let body = response.text().await.map_err(|error| {
-        ProviderError::Transient(format!("Unable to read the Anthropic usage response: {error}"))
+        ProviderError::Transient(format!(
+            "Unable to read the Anthropic usage response: {error}"
+        ))
     })?;
 
     if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
@@ -204,7 +229,9 @@ async fn call_usage(app: &AppState, secret: &OAuthSecret) -> Result<RawUsage, Pr
     }
     if status == StatusCode::TOO_MANY_REQUESTS {
         return Err(ProviderError::Transient(match retry_after {
-            Some(value) => format!("Anthropic rate-limited the usage request. Retry after {value}."),
+            Some(value) => {
+                format!("Anthropic rate-limited the usage request. Retry after {value}.")
+            }
             None => "Anthropic rate-limited the usage request.".into(),
         }));
     }
@@ -214,14 +241,13 @@ async fn call_usage(app: &AppState, secret: &OAuthSecret) -> Result<RawUsage, Pr
         )));
     }
     serde_json::from_str(&body).map_err(|error| {
-        ProviderError::Transient(format!("Anthropic returned incompatible usage data: {error}"))
+        ProviderError::Transient(format!(
+            "Anthropic returned incompatible usage data: {error}"
+        ))
     })
 }
 
-async fn refresh_secret(
-    app: &AppState,
-    secret: OAuthSecret,
-) -> Result<OAuthSecret, ProviderError> {
+async fn refresh_secret(app: &AppState, secret: OAuthSecret) -> Result<OAuthSecret, ProviderError> {
     let response = app
         .client
         .post(TOKEN_URL)
@@ -232,7 +258,9 @@ async fn refresh_secret(
         }))
         .send()
         .await
-        .map_err(|error| ProviderError::Transient(format!("Anthropic token refresh failed: {error}")))?;
+        .map_err(|error| {
+            ProviderError::Transient(format!("Anthropic token refresh failed: {error}"))
+        })?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -266,17 +294,18 @@ async fn fetch_profile(app: &AppState, access_token: &str) -> Result<Value, Prov
         .header("anthropic-beta", OAUTH_BETA)
         .send()
         .await
-        .map_err(|error| ProviderError::Transient(format!("Anthropic profile request failed: {error}")))?;
+        .map_err(|error| {
+            ProviderError::Transient(format!("Anthropic profile request failed: {error}"))
+        })?;
     if !response.status().is_success() {
         return Err(ProviderError::Transient(format!(
             "Anthropic profile request returned {}.",
             response.status()
         )));
     }
-    response
-        .json()
-        .await
-        .map_err(|error| ProviderError::Transient(format!("Invalid Anthropic profile response: {error}")))
+    response.json().await.map_err(|error| {
+        ProviderError::Transient(format!("Invalid Anthropic profile response: {error}"))
+    })
 }
 
 fn push_window(
@@ -333,7 +362,13 @@ fn infer_window_seconds(key: &str) -> Option<u64> {
 fn slug(value: &str) -> String {
     value
         .chars()
-        .map(|character| if character.is_ascii_alphanumeric() { character.to_ascii_lowercase() } else { '_' })
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect::<String>()
         .split('_')
         .filter(|part| !part.is_empty())
@@ -368,7 +403,13 @@ mod tests {
         }))
         .unwrap();
         let mut windows = Vec::new();
-        push_window(&mut windows, "five_hour", "5 hour", raw.five_hour.as_ref(), Some(18_000));
+        push_window(
+            &mut windows,
+            "five_hour",
+            "5 hour",
+            raw.five_hour.as_ref(),
+            Some(18_000),
+        );
         assert_eq!(windows[0].remaining_percent, Some(75.0));
     }
 }

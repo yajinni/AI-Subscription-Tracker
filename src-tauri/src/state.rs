@@ -1,9 +1,6 @@
 use crate::{
-    account_order::AccountOrderStore,
-    alerts::AlertStore,
-    model::LoginStatus,
-    settings::SettingsStore,
-    store::AccountStore,
+    account_order::AccountOrderStore, alerts::AlertStore, model::LoginStatus,
+    settings::SettingsStore, store::AccountStore,
 };
 use parking_lot::{Mutex, RwLock};
 use reqwest::Client;

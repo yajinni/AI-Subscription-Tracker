@@ -96,10 +96,16 @@ impl AlertStore {
         let mut seen = HashSet::new();
         for setting in &settings {
             if !ALERT_WINDOW_IDS.contains(&setting.window_id.as_str()) {
-                return Err(format!("Unsupported usage alert window: {}", setting.window_id));
+                return Err(format!(
+                    "Unsupported usage alert window: {}",
+                    setting.window_id
+                ));
             }
             if !seen.insert(setting.window_id.as_str()) {
-                return Err(format!("Duplicate usage alert window: {}", setting.window_id));
+                return Err(format!(
+                    "Duplicate usage alert window: {}",
+                    setting.window_id
+                ));
             }
             if !(1..=100).contains(&setting.threshold_percent) {
                 return Err("Alert thresholds must be between 1% and 100%.".into());
@@ -124,7 +130,8 @@ impl AlertStore {
                     window_id: setting.window_id.clone(),
                     enabled: setting.enabled,
                     threshold_percent: setting.threshold_percent,
-                    last_notified_key: previous.and_then(|candidate| candidate.last_notified_key.clone()),
+                    last_notified_key: previous
+                        .and_then(|candidate| candidate.last_notified_key.clone()),
                 }
             })
             .collect::<Vec<_>>();
@@ -217,10 +224,7 @@ pub fn canonical_window_id(window: &UsageWindow) -> Option<&'static str> {
         || label.contains("five hour")
     {
         Some("five_hour")
-    } else if id == "weekly"
-        || window.window_seconds == Some(604_800)
-        || label.contains("weekly")
-    {
+    } else if id == "weekly" || window.window_seconds == Some(604_800) || label.contains("weekly") {
         Some("weekly")
     } else if id == "monthly" || label.contains("monthly") {
         Some("monthly")

@@ -33,7 +33,9 @@ pub async fn refresh(
         .header(COOKIE, format!("auth={auth_cookie}"))
         .send()
         .await
-        .map_err(|error| ProviderError::Transient(format!("OpenCode Go dashboard request failed: {error}")))?;
+        .map_err(|error| {
+            ProviderError::Transient(format!("OpenCode Go dashboard request failed: {error}"))
+        })?;
     let status = response.status();
     let final_path = response.url().path().to_string();
     let body = response.text().await.map_err(|error| {
@@ -65,7 +67,12 @@ pub async fn refresh(
 
     let mut windows = Vec::new();
     if let Some(window) = rolling {
-        windows.push(normalize_window("five_hour", "5 hour", window, Some(18_000)));
+        windows.push(normalize_window(
+            "five_hour",
+            "5 hour",
+            window,
+            Some(18_000),
+        ));
     }
     if let Some(window) = weekly {
         windows.push(normalize_window("weekly", "Weekly", window, Some(604_800)));
@@ -137,7 +144,13 @@ fn number_after(value: &str, marker: &str) -> Option<f64> {
     }
 }
 
-fn parse_data_slots(body: &str) -> (Option<ParsedWindow>, Option<ParsedWindow>, Option<ParsedWindow>) {
+fn parse_data_slots(
+    body: &str,
+) -> (
+    Option<ParsedWindow>,
+    Option<ParsedWindow>,
+    Option<ParsedWindow>,
+) {
     let mut rolling = None;
     let mut weekly = None;
     let mut monthly = None;
@@ -216,7 +229,10 @@ fn parse_human_duration(value: &str) -> Option<f64> {
     let mut found = false;
     let words = lower.split_whitespace().collect::<Vec<_>>();
     for pair in words.windows(2) {
-        let Ok(amount) = pair[0].trim_matches(|character: char| !character.is_ascii_digit() && character != '.').parse::<f64>() else {
+        let Ok(amount) = pair[0]
+            .trim_matches(|character: char| !character.is_ascii_digit() && character != '.')
+            .parse::<f64>()
+        else {
             continue;
         };
         let unit = pair[1].trim_matches(|character: char| !character.is_ascii_alphabetic());
