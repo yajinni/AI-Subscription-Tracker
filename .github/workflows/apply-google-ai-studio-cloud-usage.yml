@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   build-source:
@@ -29,11 +30,38 @@ jobs:
           workspaces: src-tauri
       - name: Rebuild source-edit script
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          cat scripts/.google-ai-studio-cloud-usage.xz.* | base64 --decode > /tmp/google-ai-studio-source-edit.xz
-          xz --decompress --stdout /tmp/google-ai-studio-source-edit.xz > scripts/apply-google_ai_studio_cloud_usage.py
-          python -m py_compile scripts/apply_google_ai_studio_cloud_usage.py
-          test "$(sha256sum scripts/apply_google_ai_studio_cloud_usage.py | awk '{print $1}')" = "164a49e4ae1b7dd4a31b8cbb2b57b3aa1e224fc43b5b687ed8e25ececacf997b"
+          python - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, lzma, subprocess
+
+          parts = sorted(Path("scripts").glob(".google-ai-studio-cloud-usage.xz.*"))
+          encoded_parts = [part.read_text(encoding="utf-8").strip() for part in parts]
+          encoded = "".join(encoded_parts)
+          lines = [f"{part.name}: {len(value)} chars" for part, value in zip(parts, encoded_parts)]
+          try:
+              compressed = base64.b64decode(encoded, validate=True)
+              source = lzma.decompress(compressed)
+              source_hash = hashlib.sha256(source).hexdigest()
+              lines += [f"encoded: {len(encoded)} chars", f"compressed: {len(compressed)} bytes", f"source: {len(source)} bytes", f"sha256: {source_hash}"]
+              Path("scripts/apply_google_ai_studio_cloud_usage.py").write_bytes(source)
+              compile(source, "apply_google_ai_studio_cloud_usage.py", "exec")
+              ok = source_hash == "164a49e4ae1b7dd4a31b8cbb2b57b3aa1e224fc43b5b687ed8e25ececacf997b"
+          except Exception as error:
+              lines.append(f"error: {error!r}")
+              ok = False
+          Path("/tmp/source-build-diagnostic.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+          if not ok:
+              raise SystemExit(1)
+          PY
+          if [ -n "$PR_NUMBER" ]; then
+            { echo 'Temporary source build diagnostic:'; echo; echo '```text'; cat /tmp/source-build-diagnostic.txt; echo '```'; } > /tmp/source-build-comment.md
+            gh pr comment "$PR_NUMBER" --body-file /tmp/source-build-comment.md || true
+          fi
+          cat /tmp/source-build-diagnostic.txt
       - name: Apply ordinary source edits
         run: python scripts/apply_google_ai_studio_cloud_usage.py
       - name: Remove temporary transport files
