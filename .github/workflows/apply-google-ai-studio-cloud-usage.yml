@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   build-clean-feature:
@@ -47,7 +48,21 @@ jobs:
         shell: bash
         run: git checkout -B ai/google-ai-studio-cloud-usage-v2 origin/main
       - name: Apply ordinary source edits
-        run: python /tmp/apply_google_ai_studio_cloud_usage.py
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set +e
+          python /tmp/apply_google_ai_studio_cloud_usage.py > /tmp/source-edit.log 2>&1
+          result=$?
+          set -e
+          if [ "$result" -ne 0 ]; then
+            { echo '## Temporary build failure'; echo; echo '```text'; tail -n 100 /tmp/source-edit.log; echo '```'; } > /tmp/pr-body.md
+            gh pr edit "$PR_NUMBER" --body-file /tmp/pr-body.md || true
+          fi
+          cat /tmp/source-edit.log
+          exit "$result"
       - name: Require provider-reported usage points
         shell: bash
         run: |
