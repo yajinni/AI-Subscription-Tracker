@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - ai/temp-google-ai-studio-source-build
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -14,7 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ai/temp-google-ai-studio-source-build
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
