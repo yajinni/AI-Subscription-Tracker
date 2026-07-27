@@ -45,8 +45,7 @@ jobs:
           PY
       - name: Start clean feature branch
         shell: bash
-        run: |
-          git checkout -B ai/google-ai-studio-cloud-usage-v2 origin/main
+        run: git checkout -B ai/google-ai-studio-cloud-usage-v2 origin/main
       - name: Apply ordinary source edits
         run: python /tmp/apply_google_ai_studio_cloud_usage.py
       - name: Require provider-reported usage points
@@ -56,22 +55,8 @@ jobs:
           from pathlib import Path
           path = Path("src-tauri/src/providers/google_ai_studio.rs")
           source = path.read_text(encoding="utf-8")
-          old = '''        let Some(model) = selected_by_name.get(model_name.as_str()) else {
-              continue;
-          };
-          let used = usage_for_window(&bucket.usage_points, kind, now).max(0.0);
-  '''
-          new = '''        let Some(model) = selected_by_name.get(model_name.as_str()) else {
-              continue;
-          };
-          if bucket.usage_points.is_empty() {
-              continue;
-          }
-          let used = usage_for_window(&bucket.usage_points, kind, now).max(0.0);
-  '''
-          if old not in source:
-              old = old.replace("              ", "            ")
-              new = new.replace("              ", "            ")
+          old = "        let Some(model) = selected_by_name.get(model_name.as_str()) else {\n            continue;\n        };\n        let used = usage_for_window(&bucket.usage_points, kind, now).max(0.0);\n"
+          new = "        let Some(model) = selected_by_name.get(model_name.as_str()) else {\n            continue;\n        };\n        if bucket.usage_points.is_empty() {\n            continue;\n        }\n        let used = usage_for_window(&bucket.usage_points, kind, now).max(0.0);\n"
           assert source.count(old) == 1
           path.write_text(source.replace(old, new), encoding="utf-8")
           PY
