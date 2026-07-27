@@ -30,17 +30,19 @@ jobs:
       - name: Rebuild source-edit script
         shell: bash
         run: |
-          cat scripts/.google-ai-studio-cloud-usage.part.* | base64 --decode > scripts/apply-google-ai-studio-cloud-usage.py
-          python -m py_compile scripts/apply-google-ai-studio-cloud-usage.py
-          test "$(sha256sum scripts/apply-google-ai-studio-cloud-usage.py | awk '{print $1}')" = "164a49e4ae1b7dd4a31b8cbb2b57b3aa1e224fc43b5b687ed8e25ececacf997b"
+          cat scripts/.google-ai-studio-cloud-usage.xz.* | base64 --decode > /tmp/google-ai-studio-source-edit.xz
+          xz --decompress --stdout /tmp/google-ai-studio-source-edit.xz > scripts/apply-google_ai_studio_cloud_usage.py
+          python -m py_compile scripts/apply_google_ai_studio_cloud_usage.py
+          test "$(sha256sum scripts/apply_google_ai_studio_cloud_usage.py | awk '{print $1}')" = "164a49e4ae1b7dd4a31b8cbb2b57b3aa1e224fc43b5b687ed8e25ececacf997b"
       - name: Apply ordinary source edits
-        run: python scripts/apply-google-ai-studio-cloud-usage.py
+        run: python scripts/apply_google_ai_studio_cloud_usage.py
       - name: Remove temporary transport files
         shell: bash
         run: |
+          rm -f scripts/.google-ai-studio-cloud-usage.xz.*
           rm -f scripts/.google-ai-studio-cloud-usage.part.*
           rm -f scripts/.google-ai-studio-cloud-usage.patch.*
-          rm -f scripts/apply-google-ai-studio-cloud-usage.py
+          rm -f scripts/apply_google_ai_studio_cloud_usage.py
           rm -f .github/workflows/apply-google-ai-studio-cloud-usage.yml
           git show origin/main:.github/workflows/validate.yml > .github/workflows/validate.yml
       - name: Format Rust
