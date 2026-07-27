@@ -87,17 +87,25 @@ jobs:
           fi
           cat /tmp/source-edit.log
           exit "$result"
-      - name: Require provider-reported usage points
+      - name: Finalize source safeguards
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-          path = Path("src-tauri/src/providers/google_ai_studio.rs")
-          source = path.read_text(encoding="utf-8")
-          old = "        let Some(model) = selected_by_name.get(model_name.as_str()) else {\n            continue;\n        };\n        let used = usage_for_window(&bucket.usage_points, kind, now).max(0.0);\n"
-          new = "        let Some(model) = selected_by_name.get(model_name.as_str()) else {\n            continue;\n        };\n        if bucket.usage_points.is_empty() {\n            continue;\n        }\n        let used = usage_for_window(&bucket.usage_points, kind, now).max(0.0);\n"
-          assert source.count(old) == 1
-          path.write_text(source.replace(old, new), encoding="utf-8")
+
+          provider_path = Path("src-tauri/src/providers/google_ai_studio.rs")
+          provider_source = provider_path.read_text(encoding="utf-8")
+          old_usage = "        let Some(model) = selected_by_name.get(model_name.as_str()) else {\n            continue;\n        };\n        let used = usage_for_window(&bucket.usage_points, kind, now).max(0.0);\n"
+          new_usage = "        let Some(model) = selected_by_name.get(model_name.as_str()) else {\n            continue;\n        };\n        if bucket.usage_points.is_empty() {\n            continue;\n        }\n        let used = usage_for_window(&bucket.usage_points, kind, now).max(0.0);\n"
+          assert provider_source.count(old_usage) == 1
+          provider_path.write_text(provider_source.replace(old_usage, new_usage), encoding="utf-8")
+
+          row_path = Path("src/components/AccountRow.tsx")
+          row_source = row_path.read_text(encoding="utf-8")
+          old_provider = '    case "antigravity": return "Google Antigravity";\n    case "opencode_go": return "OpenCode Go";\n'
+          new_provider = '    case "antigravity": return "Google Antigravity";\n    case "google_ai_studio": return "Google AI Studio";\n    case "opencode_go": return "OpenCode Go";\n'
+          assert row_source.count(old_provider) == 1
+          row_path.write_text(row_source.replace(old_provider, new_provider), encoding="utf-8")
           PY
       - name: Format Rust
         run: cargo fmt --manifest-path src-tauri/Cargo.toml
@@ -122,9 +130,37 @@ jobs:
       - name: Frontend production build
         run: npm run build
       - name: Rust tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set +e
+          cargo test --manifest-path src-tauri/Cargo.toml > /tmp/rust-test.log 2>&1
+          result=$?
+          set -e
+          if [ "$result" -ne 0 ]; then
+            { echo '## Rust test failure'; echo; echo '```text'; tail -n 180 /tmp/rust-test.log; echo '```'; } > /tmp/pr-body.md
+            gh pr edit "$PR_NUMBER" --body-file /tmp/pr-body.md || true
+          fi
+          cat /tmp/rust-test.log
+          exit "$result"
       - name: Rust check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set +e
+          cargo check --manifest-path src-tauri/Cargo.toml > /tmp/rust-check.log 2>&1
+          result=$?
+          set -e
+          if [ "$result" -ne 0 ]; then
+            { echo '## Rust check failure'; echo; echo '```text'; tail -n 180 /tmp/rust-check.log; echo '```'; } > /tmp/pr-body.md
+            gh pr edit "$PR_NUMBER" --body-file /tmp/pr-body.md || true
+          fi
+          cat /tmp/rust-check.log
+          exit "$result"
       - name: Verify diff
         run: git diff --check
       - name: Commit clean source changes
