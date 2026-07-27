@@ -6,16 +6,25 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  export-source:
+  build-clean-feature:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Rebuild source-edit script
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Rebuild and correct source-edit script
         shell: bash
         run: |
           python - <<'PY'
@@ -23,28 +32,64 @@ jobs:
           import base64, hashlib, lzma
           parts = sorted(Path("scripts").glob(".google-ai-studio-cloud-usage.xz.*"))
           encoded = "".join(part.read_text(encoding="utf-8").strip() for part in parts)
-          source = lzma.decompress(base64.b64decode(encoded, validate=True))
-          assert hashlib.sha256(source).hexdigest() == "164a49e4ae1b7dd4a31b8cbb2b57b3aa1e224fc43b5b687ed8e25ececacf997b"
-          Path("scripts/apply_google_ai_studio_cloud_usage.py").write_bytes(source)
+          source = lzma.decompress(base64.b64decode(encoded, validate=True)).decode("utf-8")
+          assert hashlib.sha256(source.encode()).hexdigest() == "164a49e4ae1b7dd4a31b8cbb2b57b3aa1e224fc43b5b687ed8e25ececacf997b"
+          old = "'''             onReconnect={() => props.onReconnect(account)}\\n             onRename={(label) => props.onRename(account, label)}\\n'''"
+          new = "'''            onReconnect={() => props.onReconnect(account)}\\n            onRename={(label) => props.onRename(account, label)}\\n'''"
+          old_result = "'''             onReconnect={() => props.onReconnect(account)}\\n             onConnectGoogleUsage={() => props.onConnectGoogleUsage(account)}\\n             onRename={(label) => props.onRename(account, label)}\\n'''"
+          new_result = "'''            onReconnect={() => props.onReconnect(account)}\\n            onConnectGoogleUsage={() => props.onConnectGoogleUsage(account)}\\n            onRename={(label) => props.onRename(account, label)}\\n'''"
+          assert source.count(old) == 1 and source.count(old_result) == 1
+          source = source.replace(old, new).replace(old_result, new_result)
+          Path("/tmp/apply_google_ai_studio_cloud_usage.py").write_text(source, encoding="utf-8")
+          compile(source, "apply_google_ai_studio_cloud_usage.py", "exec")
           PY
-      - name: Apply source edits and retain diagnostics
+      - name: Start clean feature branch
         shell: bash
         run: |
-          set +e
-          python scripts/apply_google_ai_studio_cloud_usage.py > /tmp/apply-source.log 2>&1
-          echo "$?" > /tmp/apply-source-exit-code.txt
-          set -e
-          cat /tmp/apply-source.log
-      - name: Package partial source tree and traceback
+          git checkout -B ai/google-ai-studio-cloud-usage-v2 origin/main
+      - name: Apply ordinary source edits
+        run: python /tmp/apply_google_ai_studio_cloud_usage.py
+      - name: Require provider-reported usage points
         shell: bash
         run: |
-          tar --exclude=.git --exclude=node_modules --exclude=src-tauri/target -czf /tmp/google-ai-studio-partial-source.tgz .
-          mkdir -p /tmp/google-ai-studio-diagnostic
-          cp /tmp/google-ai-studio-partial-source.tgz /tmp/google-ai-studio-diagnostic/
-          cp /tmp/apply-source.log /tmp/google-ai-studio-diagnostic/
-          cp /tmp/apply-source-exit-code.txt /tmp/google-ai-studio-diagnostic/
-      - uses: actions/upload-artifact@v4
-        with:
-          name: google-ai-studio-partial-source
-          path: /tmp/google-ai-studio-diagnostic
-          if-no-files-found: error
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("src-tauri/src/providers/google_ai_studio.rs")
+          source = path.read_text(encoding="utf-8")
+          old = '''        let Some(model) = selected_by_name.get(model_name.as_str()) else {
+              continue;
+          };
+          let used = usage_for_window(&bucket.usage_points, kind, now).max(0.0);
+  '''
+          new = '''        let Some(model) = selected_by_name.get(model_name.as_str()) else {
+              continue;
+          };
+          if bucket.usage_points.is_empty() {
+              continue;
+          }
+          let used = usage_for_window(&bucket.usage_points, kind, now).max(0.0);
+  '''
+          if old not in source:
+              old = old.replace("              ", "            ")
+              new = new.replace("              ", "            ")
+          assert source.count(old) == 1
+          path.write_text(source.replace(old, new), encoding="utf-8")
+          PY
+      - name: Format and validate
+        shell: bash
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml
+          npm install
+          npm run check
+          npm run build
+          cargo test --manifest-path src-tauri/Cargo.toml
+          cargo check --manifest-path src-tauri/Cargo.toml
+          git diff --check
+      - name: Commit clean source changes
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add CHANGELOG.md src src-tauri/src
+          git commit -m "feat: add Google AI Studio Cloud usage"
+          git push --force-with-lease origin HEAD:ai/google-ai-studio-cloud-usage-v2
