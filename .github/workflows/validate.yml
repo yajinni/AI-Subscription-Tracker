@@ -7,127 +7,63 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
   statuses: write
 
 jobs:
-  apply-google-ai-studio-cloud-usage:
+  diagnose-google-ai-studio-cloud-usage-patch:
     runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.changes.outputs.changed }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: Rebuild patch script
+      - name: Diagnose patch transport
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          python - <<'PY'
+          python - <<'PY' > /tmp/patch-diagnostic.txt
           from pathlib import Path
           import base64
           import hashlib
+          import string
 
+          allowed = set(string.ascii_letters + string.digits + "+/=")
           parts = [Path(f"scripts/.google-ai-studio-cloud-usage.patch.{index:02d}") for index in range(6)]
-          encoded = "".join(part.read_text(encoding="utf-8").strip() for part in parts)
-          decoded = base64.b64decode(encoded, validate=True)
-          print("encoded bytes:", len(encoded))
-          print("decoded bytes:", len(decoded))
-          print("sha256:", hashlib.sha256(decoded).hexdigest())
-          Path("scripts/apply-google-ai-studio-cloud-usage.py").write_bytes(decoded)
+          chunks = []
+          for part in parts:
+              value = part.read_text(encoding="utf-8")
+              chunks.append(value.strip())
+              invalid = sorted(set(value.strip()) - allowed)
+              print(f"{part.name}: characters={len(value)} stripped={len(value.strip())} invalid={invalid!r}")
+          encoded = "".join(chunks)
+          print(f"encoded characters={len(encoded)} modulo4={len(encoded) % 4}")
+          try:
+              decoded = base64.b64decode(encoded, validate=True)
+              print(f"decoded bytes={len(decoded)}")
+              print(f"sha256={hashlib.sha256(decoded).hexdigest()}")
+              try:
+                  compile(decoded, "apply_google_ai_studio_cloud_usage.py", "exec")
+                  print("python syntax=valid")
+              except Exception as error:
+                  print(f"python syntax error={error!r}")
+          except Exception as error:
+              print(f"strict decode error={error!r}")
+              padded = encoded + "=" * (-len(encoded) % 4)
+              try:
+                  decoded = base64.b64decode(padded, validate=False)
+                  print(f"relaxed decoded bytes={len(decoded)}")
+                  print(f"relaxed sha256={hashlib.sha256(decoded).hexdigest()}")
+              except Exception as relaxed_error:
+                  print(f"relaxed decode error={relaxed_error!r}")
           PY
-          python -m py_compile scripts/apply-google-ai-studio-cloud-usage.py
-      - name: Apply patch
-        run: python scripts/apply-google-ai-studio-cloud-usage.py
-      - name: Format Rust
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml
-      - name: Check diff
-        run: git diff --check
-      - name: Detect generated changes
-        id: changes
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Commit generated changes
-        if: steps.changes.outputs.changed == 'true'
-        shell: bash
-        run: |
-          rm scripts/apply-google-ai-studio-cloud-usage.py
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "feat: connect Google AI Studio Cloud Monitoring [generated]"
-          git push
-
-  frontend:
-    needs: apply-google-ai-studio-cloud-usage
-    if: needs.apply-google-ai-studio-cloud-usage.outputs.changed != 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm install
-      - run: npm run check
-      - run: npm run build
-      - name: Publish frontend validation status
-        if: always()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          JOB_STATUS: ${{ job.status }}
-        run: |
-          state="$JOB_STATUS"
-          if [ "$state" = "cancelled" ]; then state="error"; fi
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
-            -f state="$state" \
-            -f context="validate/frontend" \
-            -f description="Frontend type-check and production build"
-
-  desktop-rust:
-    needs: apply-google-ai-studio-cloud-usage
-    if: needs.apply-google-ai-studio-cloud-usage.outputs.changed != 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-15]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-      - run: npm install
-      - run: npm run build
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - run: cargo check --manifest-path src-tauri/Cargo.toml
-      - name: Verify generated native icons
-        shell: bash
-        run: |
-          test -s src-tauri/icons/icon.png
-          test -s src-tauri/icons/icon.ico
-          test -s src-tauri/icons/icon.icns
-      - name: Publish desktop validation status
-        if: always()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          JOB_STATUS: ${{ job.status }}
-          TARGET_OS: ${{ matrix.os }}
-        run: |
-          state="$JOB_STATUS"
-          if [ "$state" = "cancelled" ]; then state="error"; fi
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
-            -f state="$state" \
-            -f context="validate/desktop-${TARGET_OS}" \
-            -f description="Rust tests, checks, and native icon generation on ${TARGET_OS}"
+          {
+            echo 'Patch transport diagnostic:'
+            echo
+            echo '```text'
+            cat /tmp/patch-diagnostic.txt
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/comment.md
+          cat /tmp/patch-diagnostic.txt
