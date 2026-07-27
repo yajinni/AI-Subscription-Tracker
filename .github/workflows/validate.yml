@@ -24,11 +24,19 @@ jobs:
       - name: Rebuild patch script
         shell: bash
         run: |
-          wc -c scripts/.google-ai-studio-cloud-usage.patch.*
-          cat scripts/.google-ai-studio-cloud-usage.patch.* | base64 --decode > scripts/apply-google-ai-studio-cloud-usage.py
-          wc -c scripts/apply-google-ai-studio-cloud-usage.py
-          sha256sum scripts/apply-google-ai-studio-cloud-usage.py
-          test "$(wc -c < scripts/apply-google-ai-studio-cloud-usage.py)" = "78835"
+          python - <<'PY'
+          from pathlib import Path
+          import base64
+          import hashlib
+
+          parts = [Path(f"scripts/.google-ai-studio-cloud-usage.patch.{index:02d}") for index in range(6)]
+          encoded = "".join(part.read_text(encoding="utf-8").strip() for part in parts)
+          decoded = base64.b64decode(encoded, validate=True)
+          print("encoded bytes:", len(encoded))
+          print("decoded bytes:", len(decoded))
+          print("sha256:", hashlib.sha256(decoded).hexdigest())
+          Path("scripts/apply-google-ai-studio-cloud-usage.py").write_bytes(decoded)
+          PY
           python -m py_compile scripts/apply-google-ai-studio-cloud-usage.py
       - name: Apply patch
         run: python scripts/apply-google-ai-studio-cloud-usage.py
