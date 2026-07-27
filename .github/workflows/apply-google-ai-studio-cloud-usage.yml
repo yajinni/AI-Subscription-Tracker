@@ -1,0 +1,43 @@
+name: Apply Google AI Studio cloud usage patch
+
+on:
+  push:
+    branches:
+      - ai/google-ai-studio-cloud-usage
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[generated]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ai/google-ai-studio-cloud-usage
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Rebuild patch script
+        shell: bash
+        run: |
+          cat scripts/.google-ai-studio-cloud-usage.patch.* | base64 --decode > scripts/apply-google-ai-studio-cloud-usage.py
+          python -m py_compile scripts/apply-google-ai-studio-cloud-usage.py
+          test "$(sha256sum scripts/apply-google-ai-studio-cloud-usage.py | awk '{print $1}')" = "164a49e4ae1b7dd4a31b8cbb2b57b3aa1e224fc43b5b687ed8e25ececacf997b"
+      - name: Apply patch
+        run: python scripts/apply-google-ai-studio-cloud-usage.py
+      - name: Format Rust
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml
+      - name: Check diff
+        run: git diff --check
+      - name: Commit generated changes
+        shell: bash
+        run: |
+          rm scripts/apply-google-ai-studio-cloud-usage.py
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat: connect Google AI Studio Cloud Monitoring [generated]"
+          git push
