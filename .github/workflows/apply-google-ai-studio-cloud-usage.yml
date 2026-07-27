@@ -1,43 +1,64 @@
-name: Apply Google AI Studio cloud usage patch
+name: Temporary Google AI Studio source build
 
 on:
   push:
     branches:
-      - ai/google-ai-studio-cloud-usage
+      - ai/temp-google-ai-studio-source-build
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply:
-    if: ${{ !contains(github.event.head_commit.message, '[generated]') }}
+  build-source:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ai/google-ai-studio-cloud-usage
+          ref: ai/temp-google-ai-studio-source-build
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Rebuild patch script
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Rebuild source-edit script
         shell: bash
         run: |
-          cat scripts/.google-ai-studio-cloud-usage.patch.* | base64 --decode > scripts/apply-google-ai-studio-cloud-usage.py
+          cat scripts/.google-ai-studio-cloud-usage.part.* | base64 --decode > scripts/apply-google-ai-studio-cloud-usage.py
           python -m py_compile scripts/apply-google-ai-studio-cloud-usage.py
           test "$(sha256sum scripts/apply-google-ai-studio-cloud-usage.py | awk '{print $1}')" = "164a49e4ae1b7dd4a31b8cbb2b57b3aa1e224fc43b5b687ed8e25ececacf997b"
-      - name: Apply patch
+      - name: Apply ordinary source edits
         run: python scripts/apply-google-ai-studio-cloud-usage.py
-      - name: Format Rust
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml
-      - name: Check diff
-        run: git diff --check
-      - name: Commit generated changes
+      - name: Remove temporary transport files
         shell: bash
         run: |
-          rm scripts/apply-google-ai-studio-cloud-usage.py
-          if git diff --quiet; then exit 0; fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "feat: connect Google AI Studio Cloud Monitoring [generated]"
-          git push
+          rm -f scripts/.google-ai-studio-cloud-usage.part.*
+          rm -f scripts/.google-ai-studio-cloud-usage.patch.*
+          rm -f scripts/apply-google-ai-studio-cloud-usage.py
+          rm -f .github/workflows/apply-google-ai-studio-cloud-usage.yml
+          git show origin/main:.github/workflows/validate.yml > .github/workflows/validate.yml
+      - name: Format Rust
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml
+      - name: Install frontend dependencies
+        run: npm install
+      - run: npm run check
+      - run: npm run build
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: cargo check --manifest-path src-tauri/Cargo.toml
+      - name: Verify final source diff
+        shell: bash
+        run: |
+          git diff --check
+          git status --short
+      - name: Package source tree
+        shell: bash
+        run: tar --exclude=.git --exclude=node_modules --exclude=src-tauri/target -czf /tmp/google-ai-studio-source.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: google-ai-studio-source
+          path: /tmp/google-ai-studio-source.tgz
+          if-no-files-found: error
