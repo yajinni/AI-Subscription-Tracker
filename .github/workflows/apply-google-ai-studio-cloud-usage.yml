@@ -1,33 +1,20 @@
 name: Temporary Google AI Studio source build
 
 on:
-  push:
-    branches:
-      - ai/temp-google-ai-studio-source-build
   pull_request:
     branches:
       - main
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
-  build-source:
+  export-source:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
       - name: Rebuild source-edit script
         shell: bash
         run: |
@@ -39,51 +26,25 @@ jobs:
           source = lzma.decompress(base64.b64decode(encoded, validate=True))
           assert hashlib.sha256(source).hexdigest() == "164a49e4ae1b7dd4a31b8cbb2b57b3aa1e224fc43b5b687ed8e25ececacf997b"
           Path("scripts/apply_google_ai_studio_cloud_usage.py").write_bytes(source)
-          compile(source, "apply_google_ai_studio_cloud_usage.py", "exec")
           PY
-      - name: Apply ordinary source edits
+      - name: Apply source edits and retain diagnostics
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set +e
           python scripts/apply_google_ai_studio_cloud_usage.py > /tmp/apply-source.log 2>&1
-          result=$?
+          echo "$?" > /tmp/apply-source-exit-code.txt
           set -e
-          if [ "$result" -ne 0 ] && [ -n "$PR_NUMBER" ]; then
-            { echo 'Source-edit failure:'; echo; echo '```text'; tail -n 120 /tmp/apply-source.log; echo '```'; } > /tmp/source-edit-comment.md
-            gh pr comment "$PR_NUMBER" --body-file /tmp/source-edit-comment.md || true
-          fi
           cat /tmp/apply-source.log
-          exit "$result"
-      - name: Remove temporary transport files
+      - name: Package partial source tree and traceback
         shell: bash
         run: |
-          rm -f scripts/.google-ai-studio-cloud-usage.xz.*
-          rm -f scripts/.google-ai-studio-cloud-usage.part.*
-          rm -f scripts/.google-ai-studio-cloud-usage.patch.*
-          rm -f scripts/apply_google_ai_studio_cloud_usage.py
-          rm -f .github/workflows/apply-google-ai-studio-cloud-usage.yml
-          git show origin/main:.github/workflows/validate.yml > .github/workflows/validate.yml
-      - name: Format Rust
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml
-      - name: Install frontend dependencies
-        run: npm install
-      - run: npm run check
-      - run: npm run build
-      - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - run: cargo check --manifest-path src-tauri/Cargo.toml
-      - name: Verify final source diff
-        shell: bash
-        run: |
-          git diff --check
-          git status --short
-      - name: Package source tree
-        shell: bash
-        run: tar --exclude=.git --exclude=node_modules --exclude=src-tauri/target -czf /tmp/google-ai-studio-source.tgz .
+          tar --exclude=.git --exclude=node_modules --exclude=src-tauri/target -czf /tmp/google-ai-studio-partial-source.tgz .
+          mkdir -p /tmp/google-ai-studio-diagnostic
+          cp /tmp/google-ai-studio-partial-source.tgz /tmp/google-ai-studio-diagnostic/
+          cp /tmp/apply-source.log /tmp/google-ai-studio-diagnostic/
+          cp /tmp/apply-source-exit-code.txt /tmp/google-ai-studio-diagnostic/
       - uses: actions/upload-artifact@v4
         with:
-          name: google-ai-studio-source
-          path: /tmp/google-ai-studio-source.tgz
+          name: google-ai-studio-partial-source
+          path: /tmp/google-ai-studio-diagnostic
           if-no-files-found: error
