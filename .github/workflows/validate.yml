@@ -10,6 +10,42 @@ permissions:
   statuses: write
 
 jobs:
+  release-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify published v0.2.40 release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v0.2.40" > release.json
+
+          echo "Published release assets:"
+          jq -r '.assets[] | "\(.name)\t\(.size) bytes\t\(.state)"' release.json
+
+          test "$(jq -r '.tag_name' release.json)" = "v0.2.40"
+          jq -e '(.assets | length) > 0' release.json >/dev/null
+          jq -e 'all(.assets[]; .state == "uploaded" and .size > 0)' release.json >/dev/null
+
+          jq -r '.assets[].name' release.json > asset-names.txt
+          grep -E -- '-setup\.exe$' asset-names.txt
+          grep -E -- '\.msi$' asset-names.txt
+          grep -Ei -- '(aarch64|arm64).*(\.dmg|\.app\.tar\.gz)$' asset-names.txt
+          grep -Ei -- '(x64|x86_64).*(\.dmg|\.app\.tar\.gz)$' asset-names.txt
+          grep -Fx -- 'latest.json' asset-names.txt
+
+          latest_id="$(jq -r '.assets[] | select(.name == "latest.json") | .id' release.json)"
+          test -n "$latest_id"
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/${GITHUB_REPOSITORY}/releases/assets/${latest_id}" > latest.json
+
+          echo "Updater metadata:"
+          jq . latest.json
+          test "$(jq -r '.version' latest.json)" = "0.2.40"
+          jq -e '(.platforms | keys | length) >= 3' latest.json >/dev/null
+          jq -e 'all(.platforms[]; (.url | contains("/v0.2.40/")) and (.signature | length > 0))' latest.json >/dev/null
+
   frontend:
     runs-on: ubuntu-latest
     steps:
