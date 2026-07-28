@@ -1,19 +1,80 @@
 use crate::{
     model::{now_rfc3339, Account, GrokSecret, LoginStart, LoginStatus, Provider, ProviderSecret},
-    providers::grok::{default_auth_file, find_grok_binary, load_credentials},
+    providers::{
+        self,
+        grok::{default_auth_file, load_credentials, normalize_cookie_header},
+        ProviderError,
+    },
     state::AppState,
     store::save_provider_secret,
     usage,
 };
 use chrono::{Duration as ChronoDuration, Utc};
-use std::{process::Stdio, sync::Arc, time::Duration};
-use tokio::process::Command;
+use std::{
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tauri::{
+    AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
+};
+use url::Url;
 use uuid::Uuid;
 
-const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const LOGIN_WINDOW_LABEL: &str = "grok-login";
+const LOGIN_URL: &str = "https://grok.com/?_s=usage";
+const LOGIN_TIMEOUT_MINUTES: i64 = 10;
+const COOKIE_POLL_INTERVAL_MS: u64 = 750;
+const COOKIE_POLL_ATTEMPTS: usize = 800;
+const GROK_BROWSER_ACCOUNT_ID: &str = "grok-browser-session";
 
-pub async fn start_login(app: Arc<AppState>, label: String) -> Result<LoginStart, String> {
-    if app
+const CONNECT_BANNER_SCRIPT: &str = r#"
+(() => {
+  if (window.top !== window || window.location.hostname !== 'grok.com') return;
+
+  const installBanner = () => {
+    if (!document.body || document.getElementById('ai-tracker-grok-connect-banner')) return;
+    const banner = document.createElement('div');
+    banner.id = 'ai-tracker-grok-connect-banner';
+    banner.setAttribute('role', 'status');
+    banner.textContent = 'AI Subscription Tracker: Sign in to Grok. This private window closes automatically after your provider-reported weekly usage is detected.';
+    Object.assign(banner.style, {
+      position: 'fixed',
+      top: '0',
+      left: '0',
+      right: '0',
+      zIndex: '2147483647',
+      boxSizing: 'border-box',
+      padding: '14px 22px',
+      background: '#211936',
+      color: '#f7f4ff',
+      borderBottom: '1px solid #7c52d9',
+      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif',
+      fontSize: '14px',
+      fontWeight: '650',
+      lineHeight: '1.45',
+      textAlign: 'center',
+      boxShadow: '0 8px 24px rgba(0, 0, 0, .3)'
+    });
+    document.body.prepend(banner);
+    const height = Math.ceil(banner.getBoundingClientRect().height);
+    const padding = Number.parseFloat(getComputedStyle(document.body).paddingTop) || 0;
+    document.body.style.paddingTop = `${padding + height}px`;
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', installBanner, { once: true });
+  } else {
+    installBanner();
+  }
+})();
+"#;
+
+pub async fn start_login(state: Arc<AppState>, label: String) -> Result<LoginStart, String> {
+    if state
         .pending_login
         .read()
         .as_ref()
@@ -22,39 +83,83 @@ pub async fn start_login(app: Arc<AppState>, label: String) -> Result<LoginStart
         return Err("Another provider login is already in progress.".into());
     }
 
-    let binary = find_grok_binary().ok_or_else(install_message)?;
+    let app = state
+        .app_handle
+        .read()
+        .clone()
+        .ok_or_else(|| "The desktop application is not ready to open Grok login.".to_string())?;
+    if let Some(window) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
+        let _ = window.destroy();
+    }
+
     let attempt_id = Uuid::new_v4().to_string();
-    let expires_at = (Utc::now() + ChronoDuration::minutes(10)).to_rfc3339();
-    *app.pending_login.write() = Some(LoginStatus {
+    let expires_at = (Utc::now() + ChronoDuration::minutes(LOGIN_TIMEOUT_MINUTES)).to_rfc3339();
+    *state.pending_login.write() = Some(LoginStatus {
         attempt_id: attempt_id.clone(),
         status: "waiting".into(),
         message: Some(
-            "The official Grok Build login is opening. Finish signing in through xAI in your browser."
+            "Sign in to Grok in the private window. The tracker will close it after the Usage service recognizes your session."
                 .into(),
         ),
         account: None,
     });
 
-    let task_app = app.clone();
-    let task_attempt = attempt_id.clone();
-    tokio::spawn(async move {
-        let result = complete_login(task_app.clone(), label, binary).await;
-        match result {
-            Ok(account) => {
-                *task_app.pending_login.write() = Some(LoginStatus {
-                    attempt_id: task_attempt,
-                    status: "complete".into(),
-                    message: None,
-                    account: Some(account),
-                });
-            }
-            Err(error) => {
-                *task_app.pending_login.write() = Some(LoginStatus {
-                    attempt_id: task_attempt,
-                    status: "failed".into(),
-                    message: Some(error),
-                    account: None,
-                });
+    let login_url = Url::parse(LOGIN_URL).map_err(|error| error.to_string())?;
+    let (width, height) = login_window_size(&app);
+    let login_window = WebviewWindowBuilder::new(
+        &app,
+        LOGIN_WINDOW_LABEL,
+        WebviewUrl::External(login_url),
+    )
+    .title("Connect Grok / SuperGrok")
+    .inner_size(width, height)
+    .min_inner_size(820.0, 620.0)
+    .center()
+    .resizable(true)
+    .incognito(true)
+    .devtools(false)
+    .initialization_script(CONNECT_BANNER_SCRIPT)
+    .on_navigation(|url| {
+        matches!(url.scheme(), "http" | "https") || url.as_str() == "about:blank"
+    })
+    .build()
+    .map_err(|error| format!("Unable to open the Grok login window: {error}"))?;
+
+    start_cookie_poll(
+        login_window.clone(),
+        state.clone(),
+        attempt_id.clone(),
+        label,
+    );
+
+    let close_state = state.clone();
+    let close_attempt = attempt_id.clone();
+    login_window.on_window_event(move |event| {
+        if matches!(event, WindowEvent::CloseRequested { .. }) {
+            fail_if_waiting(
+                &close_state,
+                &close_attempt,
+                "Grok login was cancelled.".into(),
+            );
+        }
+    });
+
+    let timeout_state = state.clone();
+    let timeout_attempt = attempt_id.clone();
+    let timeout_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(
+            (LOGIN_TIMEOUT_MINUTES * 60) as u64,
+        ))
+        .await;
+        if is_waiting(&timeout_state, &timeout_attempt) {
+            fail_if_waiting(
+                &timeout_state,
+                &timeout_attempt,
+                "Grok login timed out. Start the connection again.".into(),
+            );
+            if let Some(window) = timeout_app.get_webview_window(LOGIN_WINDOW_LABEL) {
+                let _ = window.destroy();
             }
         }
     });
@@ -66,70 +171,104 @@ pub async fn start_login(app: Arc<AppState>, label: String) -> Result<LoginStart
     })
 }
 
-async fn complete_login(
-    app: Arc<AppState>,
+fn start_cookie_poll(
+    window: WebviewWindow,
+    state: Arc<AppState>,
+    attempt_id: String,
     label: String,
-    binary: std::path::PathBuf,
-) -> Result<Account, String> {
-    let mut command = Command::new(binary);
-    command
-        .arg("login")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let output = tokio::time::timeout(LOGIN_TIMEOUT, command.output())
-        .await
-        .map_err(|_| "Grok login timed out. Start it again and finish the browser sign-in within ten minutes.".to_string())?
-        .map_err(|error| format!("Unable to start the official Grok Build login: {error}"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let message = stderr
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .take(4)
-            .collect::<Vec<_>>()
-            .join(" ");
-        return Err(if message.is_empty() {
-            format!("Grok login exited with {}.", output.status)
-        } else {
-            format!("Grok login failed: {message}")
-        });
-    }
-
-    let auth_file = default_auth_file();
-    let mut credentials = None;
-    let mut last_error = None;
-    // The CLI normally writes auth.json before it exits, but antivirus or file
-    // synchronization can delay visibility briefly after browser completion.
-    for attempt in 0..=20 {
-        match load_credentials(&auth_file) {
-            Ok(candidate) if !candidate.is_expired() => {
-                credentials = Some(candidate);
+) {
+    let capture_in_flight = Arc::new(AtomicBool::new(false));
+    std::thread::spawn(move || {
+        let mut last_attempted_header: Option<String> = None;
+        for _ in 0..COOKIE_POLL_ATTEMPTS {
+            if !is_waiting(&state, &attempt_id) {
                 break;
             }
-            Ok(_) => last_error = Some("The Grok login produced an expired credential.".into()),
-            Err(error) => last_error = Some(error),
-        }
-        if attempt < 20 {
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-    }
-    let credentials = credentials.ok_or_else(|| {
-        format!(
-            "Grok login finished, but the tracker could not load {}. {}",
-            auth_file.display(),
-            last_error.unwrap_or_else(|| "Run `grok login` again.".into())
-        )
-    })?;
 
-    let provider_account_id = credentials.account_id();
-    let duplicate = app.store.find_duplicate(
-        &Provider::Grok,
-        provider_account_id.as_deref(),
-        credentials.email.as_deref(),
-    );
+            if !capture_in_flight.load(Ordering::SeqCst) {
+                if let Ok(cookie_header) = read_cookie_header(&window) {
+                    let changed = last_attempted_header.as_deref() != Some(cookie_header.as_str());
+                    if changed && !capture_in_flight.swap(true, Ordering::SeqCst) {
+                        last_attempted_header = Some(cookie_header.clone());
+                        let completion_state = state.clone();
+                        let completion_attempt = attempt_id.clone();
+                        let completion_label = label.clone();
+                        let completion_window = window.clone();
+                        let completion_flag = capture_in_flight.clone();
+                        tauri::async_runtime::spawn(async move {
+                            complete_cookie_login(
+                                completion_state,
+                                completion_attempt,
+                                completion_label,
+                                cookie_header,
+                                completion_window,
+                                completion_flag,
+                            )
+                            .await;
+                        });
+                    }
+                }
+            }
+
+            std::thread::sleep(Duration::from_millis(COOKIE_POLL_INTERVAL_MS));
+        }
+    });
+}
+
+async fn complete_cookie_login(
+    state: Arc<AppState>,
+    attempt_id: String,
+    label: String,
+    cookie_header: String,
+    window: WebviewWindow,
+    capture_in_flight: Arc<AtomicBool>,
+) {
+    if !is_waiting(&state, &attempt_id) {
+        return;
+    }
+
+    let probe = providers::grok::probe_cookie(state.as_ref(), &cookie_header).await;
+    let usage = match probe {
+        Ok(usage) => usage,
+        Err(ProviderError::Auth) => {
+            capture_in_flight.store(false, Ordering::SeqCst);
+            update_waiting_message(
+                &state,
+                &attempt_id,
+                "Finish signing in to Grok. Waiting for an authenticated browser session…".into(),
+            );
+            return;
+        }
+        Err(ProviderError::Transient(error)) => {
+            capture_in_flight.store(false, Ordering::SeqCst);
+            update_waiting_message(
+                &state,
+                &attempt_id,
+                format!(
+                    "Grok is signed in, but its Usage service did not return readable billing data: {error} Reload the Grok page to retry."
+                ),
+            );
+            return;
+        }
+    };
+
+    let duplicate = state
+        .store
+        .find_duplicate(&Provider::Grok, Some(GROK_BROWSER_ACCOUNT_ID), None)
+        .or_else(|| {
+            let requested_label = label.trim();
+            state.store.list().into_iter().find(|account| {
+                account.provider == Provider::Grok
+                    && !requested_label.is_empty()
+                    && account.label.eq_ignore_ascii_case(requested_label)
+            })
+        });
+    let auth_file = default_auth_file();
+    let credentials = auth_file
+        .is_file()
+        .then(|| load_credentials(&auth_file).ok())
+        .flatten()
+        .filter(|value| !value.is_expired());
     let now = now_rfc3339();
     let account_id = duplicate
         .as_ref()
@@ -139,24 +278,27 @@ async fn complete_login(
         id: account_id.clone(),
         label: if label.trim().is_empty() {
             credentials
-                .email
-                .clone()
+                .as_ref()
+                .and_then(|value| value.email.clone())
                 .unwrap_or_else(|| "Grok / SuperGrok".into())
         } else {
             label.trim().to_string()
         },
         provider: Provider::Grok,
         email: credentials
-            .email
-            .clone()
+            .as_ref()
+            .and_then(|value| value.email.clone())
             .or_else(|| duplicate.as_ref().and_then(|account| account.email.clone())),
-        provider_account_id: provider_account_id.or_else(|| {
-            duplicate
-                .as_ref()
-                .and_then(|account| account.provider_account_id.clone())
-        }),
+        provider_account_id: credentials
+            .as_ref()
+            .and_then(|value| value.account_id())
+            .or_else(|| Some(GROK_BROWSER_ACCOUNT_ID.into())),
         chatgpt_account_id: None,
-        plan: Some(credentials.plan()),
+        plan: usage
+            .plan
+            .clone()
+            .or_else(|| credentials.as_ref().map(|value| value.plan()))
+            .or_else(|| Some("Grok / SuperGrok".into())),
         created_at: duplicate
             .as_ref()
             .map(|account| account.created_at.clone())
@@ -168,32 +310,127 @@ async fn complete_login(
         last_error: None,
         auth_required: false,
     };
-    save_provider_secret(
+
+    let normalized_cookie = match normalize_cookie_header(&cookie_header) {
+        Ok(value) => value,
+        Err(error) => {
+            fail_if_waiting(&state, &attempt_id, error);
+            let _ = window.destroy();
+            return;
+        }
+    };
+    if let Err(error) = save_provider_secret(
         &account_id,
         &ProviderSecret::Grok(GrokSecret {
-            auth_file: auth_file.to_string_lossy().to_string(),
+            cookie_header: Some(normalized_cookie),
+            auth_file: auth_file
+                .is_file()
+                .then(|| auth_file.to_string_lossy().to_string()),
         }),
-    )
-    .map_err(|error| format!("Unable to save the Grok connection: {error}"))?;
-    app.store
-        .upsert(account)
-        .map_err(|error| format!("Unable to save the Grok account: {error}"))?;
-
-    match usage::refresh_account(app.clone(), &account_id).await {
-        Ok(account) => Ok(account),
-        Err(_) => app
-            .store
-            .get(&account_id)
-            .ok_or_else(|| "The Grok account disappeared after login.".to_string()),
+    ) {
+        fail_if_waiting(
+            &state,
+            &attempt_id,
+            format!("Unable to save the Grok connection: {error}"),
+        );
+        let _ = window.destroy();
+        return;
     }
+    if let Err(error) = state.store.upsert(account) {
+        fail_if_waiting(
+            &state,
+            &attempt_id,
+            format!("Unable to save the Grok account: {error}"),
+        );
+        let _ = window.destroy();
+        return;
+    }
+
+    let account = match usage::refresh_account(state.clone(), &account_id).await {
+        Ok(account) => account,
+        Err(_) => match state.store.get(&account_id) {
+            Some(account) => account,
+            None => {
+                fail_if_waiting(
+                    &state,
+                    &attempt_id,
+                    "The Grok account disappeared after login.".into(),
+                );
+                let _ = window.destroy();
+                return;
+            }
+        },
+    };
+
+    *state.pending_login.write() = Some(LoginStatus {
+        attempt_id,
+        status: "complete".into(),
+        message: None,
+        account: Some(account),
+    });
+    let _ = window.destroy();
 }
 
-fn install_message() -> String {
-    if cfg!(windows) {
-        "The official Grok Build CLI was not found. Install it in PowerShell with `irm https://x.ai/cli/install.ps1 | iex`, restart the tracker, and try again."
-            .into()
-    } else {
-        "The official Grok Build CLI was not found. Install it with `curl -fsSL https://x.ai/cli/install.sh | bash`, restart the tracker, and try again."
-            .into()
+fn read_cookie_header(window: &WebviewWindow) -> Result<String, String> {
+    let url = Url::parse("https://grok.com/")
+        .map_err(|error| format!("Unable to prepare the Grok cookie request: {error}"))?;
+    let cookies = window
+        .cookies_for_url(url)
+        .map_err(|error| format!("Unable to read the private Grok browser session: {error}"))?;
+    let mut pairs = BTreeMap::new();
+    for cookie in cookies {
+        let value = cookie.value().trim();
+        if !value.is_empty() {
+            pairs.insert(cookie.name().to_string(), value.to_string());
+        }
     }
+    let header = pairs
+        .into_iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    normalize_cookie_header(&header)
+}
+
+fn is_waiting(state: &AppState, attempt_id: &str) -> bool {
+    state
+        .pending_login
+        .read()
+        .as_ref()
+        .is_some_and(|login| login.attempt_id == attempt_id && login.status == "waiting")
+}
+
+fn update_waiting_message(state: &AppState, attempt_id: &str, message: String) {
+    if !is_waiting(state, attempt_id) {
+        return;
+    }
+    *state.pending_login.write() = Some(LoginStatus {
+        attempt_id: attempt_id.into(),
+        status: "waiting".into(),
+        message: Some(message),
+        account: None,
+    });
+}
+
+fn fail_if_waiting(state: &AppState, attempt_id: &str, message: String) {
+    if !is_waiting(state, attempt_id) {
+        return;
+    }
+    *state.pending_login.write() = Some(LoginStatus {
+        attempt_id: attempt_id.into(),
+        status: "failed".into(),
+        message: Some(message),
+        account: None,
+    });
+}
+
+fn login_window_size(app: &AppHandle) -> (f64, f64) {
+    let Some(monitor) = app.primary_monitor().ok().flatten() else {
+        return (1080.0, 760.0);
+    };
+    let scale = monitor.scale_factor();
+    let size = monitor.size();
+    let width = (f64::from(size.width) / scale * 0.82).clamp(900.0, 1280.0);
+    let height = (f64::from(size.height) / scale * 0.82).clamp(680.0, 900.0);
+    (width, height)
 }
