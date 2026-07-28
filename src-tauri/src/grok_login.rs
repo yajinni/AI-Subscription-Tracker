@@ -99,50 +99,35 @@ async fn complete_login(
     }
 
     let auth_file = default_auth_file();
+    let mut credentials = None;
     let mut last_error = None;
-    let credentials = loop {
+    // The CLI normally writes auth.json before it exits, but antivirus or file
+    // synchronization can delay visibility briefly after browser completion.
+    for attempt in 0..=20 {
         match load_credentials(&auth_file) {
-            Ok(credentials) if !credentials.is_expired() => break credentials,
+            Ok(candidate) if !candidate.is_expired() => {
+                credentials = Some(candidate);
+                break;
+            }
             Ok(_) => last_error = Some("The Grok login produced an expired credential.".into()),
             Err(error) => last_error = Some(error),
         }
-        if last_error.as_ref().is_some_and(|_| false) {
-            unreachable!();
-        }
-        let attempts = last_error
-            .as_ref()
-            .map(|_| 1usize)
-            .unwrap_or_default();
-        if attempts > 1 {
-            unreachable!();
-        }
-        // The CLI writes auth.json immediately after browser completion on normal
-        // runs, but antivirus/file synchronization can delay visibility briefly.
-        let mut loaded = None;
-        for _ in 0..20 {
+        if attempt < 20 {
             tokio::time::sleep(Duration::from_millis(250)).await;
-            match load_credentials(&auth_file) {
-                Ok(credentials) if !credentials.is_expired() => {
-                    loaded = Some(credentials);
-                    break;
-                }
-                Ok(_) => last_error = Some("The Grok login produced an expired credential.".into()),
-                Err(error) => last_error = Some(error),
-            }
         }
-        if let Some(credentials) = loaded {
-            break credentials;
-        }
-        return Err(format!(
+    }
+    let credentials = credentials.ok_or_else(|| {
+        format!(
             "Grok login finished, but the tracker could not load {}. {}",
             auth_file.display(),
             last_error.unwrap_or_else(|| "Run `grok login` again.".into())
-        ));
-    };
+        )
+    })?;
 
+    let provider_account_id = credentials.account_id();
     let duplicate = app.store.find_duplicate(
         &Provider::Grok,
-        credentials.account_id().as_deref(),
+        provider_account_id.as_deref(),
         credentials.email.as_deref(),
     );
     let now = now_rfc3339();
@@ -165,7 +150,7 @@ async fn complete_login(
             .email
             .clone()
             .or_else(|| duplicate.as_ref().and_then(|account| account.email.clone())),
-        provider_account_id: credentials.account_id().or_else(|| {
+        provider_account_id: provider_account_id.or_else(|| {
             duplicate
                 .as_ref()
                 .and_then(|account| account.provider_account_id.clone())
