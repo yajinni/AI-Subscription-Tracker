@@ -1,8 +1,8 @@
-// Grok billing integration is adapted from the MIT-licensed CodexBar Grok provider:
-// https://github.com/steipete/CodexBar/tree/main/Sources/CodexBarCore/Providers/Grok
-// The implementation reads credentials created by xAI's official `grok login`, tries
-// the official Grok Build ACP billing method, and falls back to Grok's own billing
-// gRPC-web surface. It never estimates messages or tokens.
+// Grok billing integration is adapted from the MIT-licensed CodexBar Grok
+// provider and the MIT-licensed Grok Rate Limit Display userscript. The live
+// path uses the same grok.com billing request as Grok's own Usage page. The
+// Grok Build CLI RPC remains a best-effort fallback for versions that expose it.
+// No message or token allowance is estimated.
 
 use super::{ProviderError, ProviderUsage};
 use crate::{
@@ -13,6 +13,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use reqwest::{header, StatusCode};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     env, fs,
     path::{Path, PathBuf},
     process::Stdio,
@@ -29,6 +30,7 @@ const WEB_BILLING_ENDPOINT: &str =
     "https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig";
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(8);
 const BILLING_TIMEOUT: Duration = Duration::from_secs(12);
+const MAX_COOKIE_HEADER_BYTES: usize = 32 * 1024;
 
 #[derive(Clone, Debug)]
 pub(crate) struct GrokCredentials {
@@ -65,7 +67,7 @@ impl GrokCredentials {
         {
             "SuperGrok".into()
         } else {
-            "Grok".into()
+            "Grok / SuperGrok".into()
         }
     }
 }
@@ -97,58 +99,138 @@ pub async fn refresh(
     account: &Account,
     secret: &GrokSecret,
 ) -> Result<ProviderUsage, ProviderError> {
-    let auth_file = if secret.auth_file.trim().is_empty() {
-        default_auth_file()
-    } else {
-        PathBuf::from(secret.auth_file.trim())
-    };
-    let credentials = load_credentials(&auth_file).map_err(|_| ProviderError::Auth)?;
-    if credentials.is_expired() {
+    let credentials = load_optional_credentials(secret);
+    let mut diagnostics = Vec::new();
+    let mut browser_auth_failed = false;
+
+    if let Some(cookie_header) = secret
+        .cookie_header
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        match fetch_web_billing(app, cookie_header).await {
+            Ok(snapshot) => {
+                return Ok(usage_from_snapshot(account, credentials.as_ref(), snapshot));
+            }
+            Err(GrokFetchError::Auth(message)) => {
+                browser_auth_failed = true;
+                diagnostics.push(format!("browser session: {message}"));
+            }
+            Err(error) => diagnostics.push(format!("browser session: {}", error.message())),
+        }
+    }
+
+    if credentials.as_ref().is_some_and(|value| !value.is_expired()) {
+        match fetch_cli_billing().await {
+            Ok(snapshot) => {
+                return Ok(usage_from_snapshot(account, credentials.as_ref(), snapshot));
+            }
+            Err(GrokFetchError::Auth(message)) => {
+                diagnostics.push(format!("Grok Build CLI: {message}"));
+                if secret.cookie_header.is_none() {
+                    return Err(ProviderError::Auth);
+                }
+            }
+            Err(error) => diagnostics.push(format!("Grok Build CLI: {}", error.message())),
+        }
+    }
+
+    if browser_auth_failed || (secret.cookie_header.is_none() && credentials.is_none()) {
         return Err(ProviderError::Auth);
     }
 
-    let cli_result = fetch_cli_billing().await;
-    let snapshot = match cli_result {
-        Ok(snapshot) => snapshot,
-        Err(cli_error) => match fetch_web_billing(app, &credentials).await {
-            Ok(snapshot) => snapshot,
-            Err(GrokFetchError::Auth(_)) => return Err(ProviderError::Auth),
-            Err(web_error) => {
-                return Err(ProviderError::Transient(format!(
-                    "Grok did not expose billing usage through the CLI or web billing surface. CLI: {} Web: {}",
-                    cli_error.message(),
-                    web_error.message()
-                )))
-            }
-        },
-    };
+    Err(ProviderError::Transient(if diagnostics.is_empty() {
+        "Grok did not provide current billing usage. Reconnect the account and try again."
+            .into()
+    } else {
+        format!(
+            "Grok did not provide current billing usage. {}",
+            diagnostics.join(" ")
+        )
+    }))
+}
 
+pub async fn probe_cookie(
+    app: &AppState,
+    cookie_header: &str,
+) -> Result<ProviderUsage, ProviderError> {
+    let cookie_header = normalize_cookie_header(cookie_header).map_err(ProviderError::Transient)?;
+    let snapshot = match fetch_web_billing(app, &cookie_header).await {
+        Ok(snapshot) => snapshot,
+        Err(GrokFetchError::Auth(_)) => return Err(ProviderError::Auth),
+        Err(error) => return Err(ProviderError::Transient(error.message().to_string())),
+    };
+    Ok(usage_from_snapshot(
+        &Account {
+            id: String::new(),
+            label: "Grok / SuperGrok".into(),
+            provider: crate::model::Provider::Grok,
+            email: None,
+            provider_account_id: Some("grok-browser-session".into()),
+            chatgpt_account_id: None,
+            plan: Some("Grok / SuperGrok".into()),
+            created_at: String::new(),
+            updated_at: String::new(),
+            last_usage: None,
+            last_error: None,
+            auth_required: false,
+        },
+        None,
+        snapshot,
+    ))
+}
+
+fn usage_from_snapshot(
+    account: &Account,
+    credentials: Option<&GrokCredentials>,
+    snapshot: BillingSnapshot,
+) -> ProviderUsage {
     let used = snapshot.used_percent.clamp(0.0, 100.0);
     let (id, label, window_seconds) = classify_period(
         snapshot.period_start,
         snapshot.resets_at,
         snapshot.source == "grok_web_billing",
     );
-    let window = UsageWindow {
-        id: id.into(),
-        label: label.into(),
-        used_percent: Some(used),
-        remaining_percent: Some((100.0 - used).max(0.0)),
-        resets_at: snapshot.resets_at.map(|value| value.to_rfc3339()),
-        window_seconds,
-    };
-
-    Ok(ProviderUsage {
-        plan: Some(credentials.plan()),
-        email: credentials.email.clone().or_else(|| account.email.clone()),
+    ProviderUsage {
+        plan: Some(
+            credentials
+                .map(GrokCredentials::plan)
+                .or_else(|| account.plan.clone())
+                .unwrap_or_else(|| "Grok / SuperGrok".into()),
+        ),
+        email: credentials
+            .and_then(|value| value.email.clone())
+            .or_else(|| account.email.clone()),
         provider_account_id: credentials
-            .account_id()
-            .or_else(|| account.provider_account_id.clone()),
-        windows: vec![window],
+            .and_then(GrokCredentials::account_id)
+            .or_else(|| account.provider_account_id.clone())
+            .or_else(|| Some("grok-browser-session".into())),
+        windows: vec![UsageWindow {
+            id: id.into(),
+            label: label.into(),
+            used_percent: Some(used),
+            remaining_percent: Some((100.0 - used).max(0.0)),
+            resets_at: snapshot.resets_at.map(|value| value.to_rfc3339()),
+            window_seconds,
+        }],
         credits_usd: None,
         unlimited_credits: false,
         source: snapshot.source.into(),
-    })
+    }
+}
+
+fn load_optional_credentials(secret: &GrokSecret) -> Option<GrokCredentials> {
+    let configured = secret
+        .auth_file
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let path = configured.or_else(|| {
+        let path = default_auth_file();
+        path.is_file().then_some(path)
+    })?;
+    load_credentials(&path).ok()
 }
 
 pub(crate) fn default_auth_file() -> PathBuf {
@@ -193,7 +275,7 @@ pub(crate) fn find_grok_binary() -> Option<PathBuf> {
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from);
     if let Some(home) = home {
-        for relative in [".local/bin/grok", ".local/bin/grok.exe"] {
+        for relative in [".local/bin/grok", ".local/bin/grok.exe", ".grok/bin/grok", ".grok/bin/grok.exe"] {
             let candidate = home.join(relative);
             if candidate.is_file() {
                 return Some(candidate);
@@ -289,9 +371,29 @@ fn timestamp_to_datetime(timestamp: i64) -> Option<DateTime<Utc>> {
     Utc.timestamp_opt(seconds, 0).single()
 }
 
+pub(crate) fn normalize_cookie_header(value: &str) -> Result<String, String> {
+    if value.contains(['\r', '\n']) {
+        return Err("The Grok browser session contains invalid header characters.".into());
+    }
+    let value = value.trim().strip_prefix("Cookie:").unwrap_or(value.trim());
+    let normalized = value
+        .split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty() && part.contains('='))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if normalized.is_empty() {
+        return Err("No Grok browser session cookies were found.".into());
+    }
+    if normalized.len() > MAX_COOKIE_HEADER_BYTES {
+        return Err("The Grok browser session is unexpectedly large. Sign out of Grok, sign in again, and retry.".into());
+    }
+    Ok(normalized)
+}
+
 async fn fetch_cli_billing() -> Result<BillingSnapshot, GrokFetchError> {
     let binary = find_grok_binary().ok_or_else(|| {
-        GrokFetchError::Unavailable("The official Grok Build CLI is not installed.".into())
+        GrokFetchError::Unavailable("The Grok Build CLI is not installed.".into())
     })?;
     let mut child = Command::new(binary)
         .args(["agent", "stdio"])
@@ -444,37 +546,39 @@ fn parse_rfc3339(value: &str) -> Option<DateTime<Utc>> {
 
 async fn fetch_web_billing(
     app: &AppState,
-    credentials: &GrokCredentials,
+    cookie_header: &str,
 ) -> Result<BillingSnapshot, GrokFetchError> {
+    let cookie_header = normalize_cookie_header(cookie_header)
+        .map_err(GrokFetchError::Unavailable)?;
     let response = app
         .client
         .post(WEB_BILLING_ENDPOINT)
-        .header(header::AUTHORIZATION, format!("Bearer {}", credentials.access_token))
+        .header(header::COOKIE, cookie_header)
         .header(header::ORIGIN, "https://grok.com")
         .header(header::REFERER, "https://grok.com/?_s=usage")
         .header(header::ACCEPT, "*/*")
         .header(header::CONTENT_TYPE, "application/grpc-web+proto")
+        .header("connect-protocol-version", "1")
         .header("x-grpc-web", "1")
-        .header("x-user-agent", "connect-es/2.1.1")
         .body(vec![0u8; 5])
         .send()
         .await
-        .map_err(|error| GrokFetchError::Unavailable(format!("Grok web billing request failed: {error}")))?;
+        .map_err(|error| GrokFetchError::Unavailable(format!("Grok billing request failed: {error}")))?;
     let status = response.status();
     let headers = response.headers().clone();
     let body = response
         .bytes()
         .await
-        .map_err(|error| GrokFetchError::Unavailable(format!("Unable to read Grok web billing response: {error}")))?;
+        .map_err(|error| GrokFetchError::Unavailable(format!("Unable to read Grok billing response: {error}")))?;
 
     if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
         return Err(GrokFetchError::Auth(
-            "Grok web billing rejected the current login.".into(),
+            "Grok rejected the saved browser session.".into(),
         ));
     }
     if !status.is_success() {
         return Err(GrokFetchError::Unavailable(format!(
-            "Grok web billing returned HTTP {status}."
+            "Grok billing returned HTTP {status}."
         )));
     }
     validate_grpc_status(
@@ -491,11 +595,11 @@ async fn fetch_web_billing(
         trailers.get("grpc-message").map(String::as_str),
     )?;
 
-    let (used_percent, resets_at) = parse_web_billing_response(&body)?;
+    let (used_percent, period_start, resets_at) = parse_web_billing_response(&body)?;
     Ok(BillingSnapshot {
         used_percent,
         resets_at,
-        period_start: None,
+        period_start,
         source: "grok_web_billing",
     })
 }
@@ -515,7 +619,7 @@ fn validate_grpc_status(
     if status == 16
         || lower.contains("bad-credentials")
         || lower.contains("unauthenticated")
-        || lower.contains("access token")
+        || lower.contains("session")
     {
         return Err(GrokFetchError::Auth(message.into()));
     }
@@ -525,12 +629,12 @@ fn validate_grpc_status(
         ));
     }
     Err(GrokFetchError::Unavailable(format!(
-        "Grok web billing RPC failed with status {status}: {message}"
+        "Grok billing RPC failed with status {status}: {message}"
     )))
 }
 
-fn grpc_trailer_fields(data: &[u8]) -> std::collections::HashMap<String, String> {
-    let mut fields = std::collections::HashMap::new();
+fn grpc_trailer_fields(data: &[u8]) -> HashMap<String, String> {
+    let mut fields = HashMap::new();
     let mut index = 0usize;
     while index + 5 <= data.len() {
         let flags = data[index];
@@ -590,14 +694,14 @@ impl ProtobufScan {
 
 fn parse_web_billing_response(
     data: &[u8],
-) -> Result<(f64, Option<DateTime<Utc>>), GrokFetchError> {
+) -> Result<(f64, Option<DateTime<Utc>>, Option<DateTime<Utc>>), GrokFetchError> {
     let mut payloads = grpc_data_frames(data);
     if payloads.is_empty() && looks_like_protobuf(data) {
         payloads.push(data.to_vec());
     }
     if payloads.is_empty() {
         return Err(GrokFetchError::Unavailable(
-            "Grok web billing returned no protobuf payload.".into(),
+            "Grok billing returned no protobuf payload.".into(),
         ));
     }
 
@@ -611,42 +715,61 @@ fn parse_web_billing_response(
         .iter()
         .filter(|field| {
             field.path.last() == Some(&1)
+                && !field.path.contains(&7)
                 && field.value.is_finite()
                 && (0.0..=100.0).contains(&field.value)
         })
         .min_by_key(|field| (field.path.len(), field.order))
-        .map(|field| field.value as f64);
+        .map(|field| field.value as f64)
+        .or_else(|| {
+            scan.fixed32
+                .iter()
+                .filter(|field| field.value.is_finite() && (0.0..=100.0).contains(&field.value))
+                .min_by_key(|field| (field.path.len(), field.order))
+                .map(|field| field.value as f64)
+        });
 
     let now = Utc::now();
-    let future_resets = scan
+    let timestamp_fields = scan
         .varints
         .iter()
         .filter_map(|field| {
-            if !(1_700_000_000..=2_100_000_000).contains(&field.value) {
+            if !(1_700_000_000..=4_102_444_800).contains(&field.value) {
                 return None;
             }
             let date = Utc.timestamp_opt(field.value as i64, 0).single()?;
-            (date > now).then_some((field.path.as_slice(), date))
+            Some((field.path.as_slice(), date))
         })
         .collect::<Vec<_>>();
-    let resets_at = future_resets
+    let period_start = timestamp_fields
         .iter()
-        .filter(|(path, _)| *path == [1, 5, 1])
-        .map(|(_, date)| *date)
-        .min()
-        .or_else(|| future_resets.iter().map(|(_, date)| *date).min());
-    let has_usage_period = scan.varints.iter().any(|field| {
-        field.path.starts_with(&[1, 6])
-            || (field.path == [1, 8, 1] && (field.value == 1 || field.value == 2))
-    });
-    let used_percent = percent
+        .find(|(path, _)| path.ends_with(&[8, 2, 1]))
+        .map(|(_, date)| date.to_owned())
         .or_else(|| {
-            (scan.fixed32.is_empty() && resets_at.is_some() && has_usage_period).then_some(0.0)
-        })
+            timestamp_fields
+                .iter()
+                .filter(|(_, date)| *date <= now)
+                .map(|(_, date)| date.to_owned())
+                .max()
+        });
+    let resets_at = timestamp_fields
+        .iter()
+        .find(|(path, date)| path.ends_with(&[8, 3, 1]) && *date > now)
+        .map(|(_, date)| date.to_owned())
+        .or_else(|| {
+            timestamp_fields
+                .iter()
+                .filter(|(_, date)| *date > now)
+                .map(|(_, date)| date.to_owned())
+                .min()
+        });
+
+    let used_percent = percent
+        .or_else(|| resets_at.is_some().then_some(0.0))
         .ok_or_else(|| {
-            GrokFetchError::Unavailable("Could not parse Grok web billing usage.".into())
+            GrokFetchError::Unavailable("Could not parse Grok billing usage.".into())
         })?;
-    Ok((used_percent, resets_at))
+    Ok((used_percent, period_start, resets_at))
 }
 
 fn grpc_data_frames(data: &[u8]) -> Vec<Vec<u8>> {
@@ -739,7 +862,7 @@ fn scan_protobuf(
                     index = field_start + 1;
                     continue;
                 }
-                if depth < 4 {
+                if depth < 6 {
                     let (nested, nested_order) = scan_protobuf(
                         &data[index..end],
                         depth + 1,
@@ -804,13 +927,13 @@ fn classify_period(
             return ("monthly", "Monthly", Some(seconds as u64));
         }
         if seconds > 0 {
-            return ("credits", "Credits", Some(seconds as u64));
+            return ("credits", "Included usage", Some(seconds as u64));
         }
     }
     if web_weekly {
         ("weekly", "Weekly", Some(604_800))
     } else {
-        ("credits", "Credits", None)
+        ("credits", "Included usage", None)
     }
 }
 
@@ -843,18 +966,28 @@ mod tests {
         encode_varint(value, output);
     }
 
-    fn fixture(percent: Option<f32>, reset: u64) -> Vec<u8> {
-        let mut period = Vec::new();
+    fn fixed32_field(field: u64, value: f32, output: &mut Vec<u8>) {
+        encode_varint((field << 3) | 5, output);
+        output.extend_from_slice(&value.to_bits().to_le_bytes());
+    }
+
+    fn timestamp(seconds: u64) -> Vec<u8> {
+        let mut message = Vec::new();
+        varint_field(1, seconds, &mut message);
+        message
+    }
+
+    fn fixture(percent: Option<f32>, start: u64, end: u64) -> Vec<u8> {
+        let mut usage = Vec::new();
         if let Some(percent) = percent {
-            encode_varint((1 << 3) | 5, &mut period);
-            period.extend_from_slice(&percent.to_bits().to_le_bytes());
+            fixed32_field(1, percent, &mut usage);
         }
-        let mut reset_message = Vec::new();
-        varint_field(1, reset, &mut reset_message);
-        length_field(5, &reset_message, &mut period);
-        varint_field(6, 1, &mut period);
+        let mut period = Vec::new();
+        length_field(2, &timestamp(start), &mut period);
+        length_field(3, &timestamp(end), &mut period);
+        length_field(8, &period, &mut usage);
         let mut root = Vec::new();
-        length_field(1, &period, &mut root);
+        length_field(1, &usage, &mut root);
         let mut framed = vec![0, 0, 0, 0, 0];
         let length = (root.len() as u32).to_be_bytes();
         framed[1..5].copy_from_slice(&length);
@@ -877,30 +1010,46 @@ mod tests {
     }
 
     #[test]
-    fn parses_provider_reported_percent_and_reset() {
-        let reset = (Utc::now().timestamp() + 86_400) as u64;
-        let (percent, parsed_reset) = parse_web_billing_response(&fixture(Some(42.5), reset)).unwrap();
+    fn normalizes_cookie_headers_without_accepting_injection() {
+        assert_eq!(
+            normalize_cookie_header(" Cookie: session=abc; theme=dark ").unwrap(),
+            "session=abc; theme=dark"
+        );
+        assert!(normalize_cookie_header("session=abc\r\nAuthorization: bad").is_err());
+    }
+
+    #[test]
+    fn parses_provider_reported_percent_and_weekly_period() {
+        let start = (Utc::now().timestamp() - 86_400) as u64;
+        let end = start + 7 * 86_400;
+        let (percent, parsed_start, parsed_end) =
+            parse_web_billing_response(&fixture(Some(42.5), start, end)).unwrap();
         assert!((percent - 42.5).abs() < 0.01);
-        assert_eq!(parsed_reset.unwrap().timestamp(), reset as i64);
+        assert_eq!(parsed_start.unwrap().timestamp(), start as i64);
+        assert_eq!(parsed_end.unwrap().timestamp(), end as i64);
     }
 
     #[test]
     fn treats_omitted_proto3_percent_as_zero_for_active_period() {
-        let reset = (Utc::now().timestamp() + 86_400) as u64;
-        let (percent, _) = parse_web_billing_response(&fixture(None, reset)).unwrap();
+        let start = (Utc::now().timestamp() - 86_400) as u64;
+        let end = start + 7 * 86_400;
+        let (percent, _, _) = parse_web_billing_response(&fixture(None, start, end)).unwrap();
         assert_eq!(percent, 0.0);
     }
 
     #[test]
-    fn classifies_common_billing_cycles() {
-        let start = Utc::now();
-        assert_eq!(
-            classify_period(Some(start), Some(start + chrono::Duration::days(7)), false).0,
-            "weekly"
-        );
-        assert_eq!(
-            classify_period(Some(start), Some(start + chrono::Duration::days(30)), false).0,
-            "monthly"
-        );
+    fn parses_cli_billing_contract() {
+        let response = json!({
+            "result": {
+                "billingCycle": {
+                    "billingPeriodStart": "2026-07-01T00:00:00Z",
+                    "billingPeriodEnd": "2026-08-01T00:00:00Z"
+                },
+                "monthlyLimit": { "val": 1000 },
+                "usage": { "totalUsed": { "val": 250 } }
+            }
+        });
+        let parsed = parse_rpc_billing(response).unwrap();
+        assert_eq!(parsed.used_percent, 25.0);
     }
 }
