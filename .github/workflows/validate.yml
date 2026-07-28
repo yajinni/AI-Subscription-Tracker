@@ -18,7 +18,20 @@ jobs:
         with:
           node-version: 22
       - run: npm install
-      - run: npm run check
+      - name: Run frontend type-check
+        shell: bash
+        run: |
+          set +e
+          npm run check > frontend-check.log 2>&1
+          status=$?
+          cat frontend-check.log
+          exit $status
+      - name: Upload frontend type-check diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-typecheck-diagnostics
+          path: frontend-check.log
       - run: npm run build
       - name: Publish frontend validation status
         if: always()
