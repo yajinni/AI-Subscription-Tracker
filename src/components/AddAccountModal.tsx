@@ -16,7 +16,7 @@ const providerOptions: Array<{ id: ConnectionProvider; label: string; detail: st
   { id: "anthropic", label: "Anthropic Claude", detail: "Claude Pro or Max through Anthropic OAuth" },
   { id: "antigravity", label: "Google Antigravity", detail: "Google OAuth and Cloud Code quota data" },
   { id: "google_ai_studio", label: "Google AI Studio", detail: "Validate an API key, choose models, and optionally connect project quota usage" },
-  { id: "grok", label: "Grok / SuperGrok", detail: "Official Grok Build login and provider-reported subscription usage" },
+  { id: "grok", label: "Grok / SuperGrok", detail: "Private grok.com sign-in and provider-reported weekly usage" },
   { id: "opencode_go", label: "OpenCode Go", detail: "Sign in and select Go; setup is detected automatically" },
 ];
 
@@ -203,7 +203,7 @@ export function AddAccountModal({
         message: provider === "opencode_go"
           ? "Sign in to OpenCode and select Go from the sidebar."
           : provider === "grok"
-            ? "Finish the xAI sign-in opened by the official Grok Build CLI."
+            ? "Sign in to Grok in the private window."
             : null,
         account: null,
       });
@@ -221,7 +221,7 @@ export function AddAccountModal({
     : provider === "google_ai_studio"
       ? "Enter an AI Studio API key, load the model list directly from Google, and choose which models to track. After the account is added, connect its Google Cloud project to retrieve provider-reported quota usage."
       : provider === "grok"
-        ? "The tracker runs xAI’s official Grok Build login, reads the resulting local account identity, and retrieves only provider-reported subscription usage and reset data. Your xAI password never passes through this app."
+        ? "A private Grok window opens inside the tracker. After you sign in, the tracker securely saves only the Grok session needed to read the provider-reported weekly usage percentage and reset time. Your xAI password never passes through the tracker."
         : `Finish the ${providerName(provider)} login in your browser. Passwords never pass through this app.`;
 
   const googleReady = Boolean(
@@ -348,11 +348,11 @@ export function AddAccountModal({
           <div className="guided-login-card grok-login-card">
             <strong>What happens next</strong>
             <ol>
-              <li>The tracker starts xAI’s official <strong>Grok Build</strong> login.</li>
-              <li>Finish signing in to your Grok or SuperGrok account in the browser.</li>
-              <li>The tracker reads the local xAI credential and loads the reported usage percentage and reset time.</li>
+              <li>The tracker opens a temporary private <strong>grok.com</strong> window.</li>
+              <li>Sign in normally to your Grok or SuperGrok account.</li>
+              <li>The window closes after Grok reports your weekly usage percentage and reset time.</li>
             </ol>
-            <small>The official Grok Build CLI must be installed. The tracker does not estimate tokens or message counts and does not store your xAI password.</small>
+            <small>The session needed for read-only usage checks is stored in Credential Manager or Keychain. The tracker does not estimate tokens or message counts and never receives your xAI password.</small>
           </div>
         ) : null}
 
