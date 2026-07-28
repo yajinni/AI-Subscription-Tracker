@@ -162,7 +162,10 @@ pub struct GoogleAiStudioSecret {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrokSecret {
-    pub auth_file: String,
+    #[serde(default)]
+    pub cookie_header: Option<String>,
+    #[serde(default)]
+    pub auth_file: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
