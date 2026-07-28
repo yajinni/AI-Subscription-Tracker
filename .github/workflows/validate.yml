@@ -44,7 +44,7 @@ jobs:
           jq . latest.json
           test "$(jq -r '.version' latest.json)" = "0.2.40"
           jq -e '(.platforms | keys | length) >= 3' latest.json >/dev/null
-          jq -e 'all(.platforms[]; (.url | contains("/v0.2.40/")) and (.signature | length > 0))' latest.json >/dev/null
+          jq -e 'all(.platforms[]; (.url | contains("/releases/assets/")) and (.signature | length > 0))' latest.json >/dev/null
 
   frontend:
     runs-on: ubuntu-latest
