@@ -1,0 +1,390 @@
+name: Apply compact cards and Trello reorder
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-patch:
+    if: github.head_ref == 'ai/compact-cards-trello-reorder'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply focused UI patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one match in {path}, found {count}: {old[:80]!r}")
+              file.write_text(text.replace(old, new, 1))
+
+          app = Path("src/App.tsx")
+          app_text = app.read_text()
+
+          status_close = '''            <span className={`account-status-badge ${status.className}`}>{status.label}</span>
+          </div>'''
+          status_with_actions = '''            <span className={`account-status-badge ${status.className}`}>{status.label}</span>
+            <div className="account-card-name-actions">
+              <button
+                type="button"
+                className="account-card-action"
+                title="Usage notifications"
+                aria-label={`Configure usage notifications for ${account.label}`}
+                disabled={Boolean(busy)}
+                onClick={onNotifications}
+              ><BellIcon /></button>
+              <button
+                type="button"
+                className="account-card-action remove-action"
+                title="Remove this account"
+                aria-label={`Remove ${account.label}`}
+                disabled={Boolean(busy)}
+                onClick={onRemove}
+              >{isRemoving ? <span className="mini-spinner" /> : <CloseIcon />}</button>
+              <button
+                type="button"
+                className={`account-card-action ${isRefreshing ? "spinning" : ""}`}
+                title="Refresh this account"
+                aria-label={`Refresh ${account.label}`}
+                disabled={Boolean(busy)}
+                onClick={onRefresh}
+              ><RefreshIcon /></button>
+            </div>
+          </div>'''
+          if app_text.count(status_close) != 1:
+              raise SystemExit("Could not locate account status row")
+          app_text = app_text.replace(status_close, status_with_actions, 1)
+
+          old_actions = '''          <button
+            type="button"
+            className={`account-card-action ${isRefreshing ? "spinning" : ""}`}
+            title="Refresh this account"
+            aria-label={`Refresh ${account.label}`}
+            disabled={Boolean(busy)}
+            onClick={onRefresh}
+          ><RefreshIcon /></button>
+          <button
+            type="button"
+            className="account-card-action remove-action"
+            title="Remove this account"
+            aria-label={`Remove ${account.label}`}
+            disabled={Boolean(busy)}
+            onClick={onRemove}
+          >{isRemoving ? <span className="mini-spinner" /> : <CloseIcon />}</button>
+          <button
+            type="button"
+            className="account-card-action"
+            title="Usage notifications"
+            aria-label={`Configure usage notifications for ${account.label}`}
+            disabled={Boolean(busy)}
+            onClick={onNotifications}
+          ><BellIcon /></button>
+'''
+          if app_text.count(old_actions) != 1:
+              raise SystemExit("Could not locate old account header actions")
+          app_text = app_text.replace(old_actions, "", 1)
+
+          app_text = app_text.replace(
+              '<div className="account-card-header-actions">',
+              '<div className={`account-card-header-actions ${account.provider === "google_ai_studio" ? "has-google-action" : "plan-only-actions"}`}>',
+              1,
+          )
+          app_text = app_text.replace(
+              '<div className="account-card-metrics">',
+              '<div className={`account-card-metrics ${windows.length > 2 ? "multi-row-metrics" : ""}`}>',
+              1,
+          )
+          old_value = '      <strong>{remaining == null ? unavailableLabel : `${Math.round(remaining)}% remaining`}</strong>\n'
+          new_value = '''      <strong className="metric-full-value">{remaining == null ? unavailableLabel : `${Math.round(remaining)}% remaining`}</strong>
+      <span className="metric-compact-value">{remaining == null ? unavailableLabel : `${Math.round(remaining)}%`}</span>
+'''
+          if app_text.count(old_value) != 1:
+              raise SystemExit("Could not locate metric value")
+          app_text = app_text.replace(old_value, new_value, 1)
+          app.write_text(app_text)
+
+          css = Path("src/ui-refinements.css")
+          css_text = css.read_text()
+          marker = "/* Compact account cards and Trello-style reorder support */"
+          if marker in css_text:
+              raise SystemExit("Compact card CSS already present")
+          css_text += r'''
+
+/* Compact account cards and Trello-style reorder support */
+.account-card-name-row > h2,
+.account-card-name-row > .account-card-name-input,
+.account-card-name-row > .account-name-edit,
+.account-card-name-row > .account-status-badge {
+  order: 1;
+}
+
+.account-card-name-row > h2,
+.account-card-name-row > .account-card-name-input {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.account-card-name-row::after {
+  order: 2;
+  flex: 0 0 auto;
+}
+
+.account-card-name-actions {
+  order: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.account-card-header-actions.plan-only-actions {
+  display: none;
+}
+
+.metric-compact-value {
+  display: none;
+}
+
+.account-card-metrics.multi-row-metrics {
+  grid-template-columns: repeat(2, minmax(210px, 1fr));
+  column-gap: 28px;
+}
+
+.account-card-metrics.multi-row-metrics .account-usage-metric,
+.account-card-metrics.multi-row-metrics .account-usage-metric + .account-usage-metric {
+  padding-left: 0;
+  padding-right: 0;
+  border-left: 0;
+}
+
+@media (max-width: 1180px) {
+  .provider-account-card-header {
+    grid-template-columns: 46px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    min-height: 72px;
+    padding: 12px 14px;
+  }
+
+  .account-card-provider-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .account-card-provider-icon svg,
+  .account-card-provider-icon img {
+    width: 28px;
+    height: 28px;
+  }
+
+  .account-card-name-row {
+    gap: 6px;
+  }
+
+  .account-card-name-actions {
+    gap: 2px;
+  }
+
+  .account-card-action {
+    width: 28px !important;
+    height: 28px !important;
+  }
+
+  .provider-account-card .account-card-name-actions .account-card-action svg,
+  .provider-account-card .account-card-name-actions .account-card-action::before {
+    width: 22px !important;
+    height: 22px !important;
+  }
+
+  .account-card-header-actions.has-google-action {
+    grid-column: 2 / -1;
+    justify-content: flex-start;
+    padding-top: 4px;
+    border-top: 0;
+  }
+
+  .account-card-metrics,
+  .account-card-metrics.multi-row-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 18px;
+    padding: 0 14px;
+  }
+
+  .account-card-metrics .account-usage-metric,
+  .account-card-metrics .account-usage-metric + .account-usage-metric {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    min-height: 48px;
+    padding: 10px 0;
+    border: 0;
+  }
+
+  .account-card-metrics .metric-heading {
+    display: contents;
+  }
+
+  .account-card-metrics .metric-label,
+  .account-card-metrics .metric-full-value,
+  .account-card-metrics .account-metric-track,
+  .account-card-metrics .metric-reset {
+    display: none !important;
+  }
+
+  .account-card-metrics .metric-compact-value {
+    order: 1;
+    display: inline;
+    color: #f5f1ef;
+    font-size: 15px;
+    line-height: 20px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .account-card-metrics .metric-window-pill {
+    order: 2;
+    display: inline-flex;
+    grid-column: auto;
+    grid-row: auto;
+    align-self: center;
+    width: fit-content;
+    margin: 0;
+    padding: 2px 7px;
+    white-space: nowrap;
+  }
+
+  .account-card-metrics .account-credit-metric {
+    display: none !important;
+  }
+}
+'''
+          css.write_text(css_text)
+
+          reorder = Path("src/dashboard-reorder.ts")
+          reorder_text = reorder.read_text()
+          reorder_text = reorder_text.replace(
+              '''  lastClientX: number;
+  lastClientY: number;
+  descriptor: DragDescriptor;''',
+              '''  lastClientX: number;
+  lastClientY: number;
+  grabOffsetY: number;
+  sourceHeight: number;
+  descriptor: DragDescriptor;''',
+              1,
+          )
+          old_update = '''function updatePlaceholderFromPointer(drag: ActiveDrag, clientY: number): void {
+  const elements = reorderElements(drag);'''
+          new_update = '''function floatingCenterY(drag: ActiveDrag): number {
+  return drag.lastClientY - drag.grabOffsetY + drag.sourceHeight / 2;
+}
+
+function updatePlaceholderFromPointer(drag: ActiveDrag): void {
+  const clientY = floatingCenterY(drag);
+  const elements = reorderElements(drag);'''
+          if reorder_text.count(old_update) != 1:
+              raise SystemExit("Could not locate placeholder update function")
+          reorder_text = reorder_text.replace(old_update, new_update, 1)
+          reorder_text = reorder_text.replace(
+              '''    lastClientX: event.clientX,
+    lastClientY: event.clientY,
+    descriptor,''',
+              '''    lastClientX: event.clientX,
+    lastClientY: event.clientY,
+    grabOffsetY: candidate.startY - bounds.top,
+    sourceHeight: bounds.height,
+    descriptor,''',
+              1,
+          )
+          reorder_text = reorder_text.replace(
+              '    transform: "translate3d(0, 0, 0)",',
+              '    transform: "translate3d(0, 0, 0) rotate(0.8deg) scale(1.01)",',
+              1,
+          )
+          reorder_text = reorder_text.replace(
+              '  updatePlaceholderFromPointer(active, event.clientY);',
+              '  updatePlaceholderFromPointer(active);',
+              1,
+          )
+          reorder_text = reorder_text.replace(
+              '      updatePlaceholderFromPointer(drag, drag.lastClientY);',
+              '      updatePlaceholderFromPointer(drag);',
+              1,
+          )
+          reorder_text = reorder_text.replace(
+              '  updatePlaceholderFromPointer(drag, event.clientY);',
+              '  updatePlaceholderFromPointer(drag);',
+              1,
+          )
+          reorder_text = reorder_text.replace(
+              '  drag.source.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0)`;',
+              '  drag.source.style.transform = `translate3d(${deltaX}px, ${deltaY}px, 0) rotate(0.8deg) scale(1.01)`;',
+              1,
+          )
+          reorder.write_text(reorder_text)
+
+          reorder_css = Path("src/dashboard-reorder.css")
+          reorder_css_text = reorder_css.read_text()
+          old_placeholder = '''  border: 1px dashed rgba(208, 188, 255, 0.72);
+  background: rgba(160, 120, 255, 0.1);
+  box-shadow: inset 3px 0 0 rgba(160, 120, 255, 0.72);'''
+          new_placeholder = '''  border: 0;
+  background: transparent;
+  box-shadow: none;'''
+          if reorder_css_text.count(old_placeholder) != 1:
+              raise SystemExit("Could not locate reorder placeholder styling")
+          reorder_css.write_text(reorder_css_text.replace(old_placeholder, new_placeholder, 1))
+
+          changelog = Path("CHANGELOG.md")
+          changelog_text = changelog.read_text()
+          old_changelog = '''## Unreleased
+
+_No unreleased user-facing changes yet._'''
+          new_changelog = '''## Unreleased
+
+### Improved
+
+- Compact account cards now keep notification, remove, and refresh controls beside the account name and use the lower row for concise percentage and usage-window summaries.
+- Provider and account dragging now follows the Trello-style interaction reference: the floating card tracks the pointer while a transparent full-size gap moves through the list and neighboring items animate into the exact pending order.
+
+### Fixed
+
+- Accounts with multiple rows of usage limits no longer indent later rows with a misplaced vertical separator.'''
+          if changelog_text.count(old_changelog) != 1:
+              raise SystemExit("Could not locate Unreleased changelog section")
+          changelog.write_text(changelog_text.replace(old_changelog, new_changelog, 1))
+          PY
+      - name: Install dependencies
+        run: npm install
+      - name: TypeScript check
+        run: npm run check
+      - name: Production build
+        run: npm run build
+      - name: Commit focused product changes
+        shell: bash
+        run: |
+          rm .github/workflows/apply-compact-cards-trello-reorder.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md src/App.tsx src/ui-refinements.css src/dashboard-reorder.ts src/dashboard-reorder.css .github/workflows/apply-compact-cards-trello-reorder.yml
+          git commit -m "improve compact account cards and live reorder preview"
+          git push origin HEAD:${GITHUB_HEAD_REF}
