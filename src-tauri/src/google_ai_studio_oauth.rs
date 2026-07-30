@@ -217,6 +217,7 @@ async fn start_oauth(
                 &server_context,
                 format!("Google Cloud callback server failed: {error}"),
             );
+            server_context.app.stop_login_shutdown(&server_context.attempt_id);
         }
     });
 
@@ -373,9 +374,12 @@ async fn complete_callback(
 
     let outcome = match &context.mode {
         LoginMode::Connect => {
-            if let Some(project) =
-                lookup_key_project(context.app.as_ref(), &stored.api_key, &oauth.access_token)
-                    .await?
+            if let Some(project) = lookup_key_project(
+                context.app.as_ref(),
+                &stored.api_key,
+                &oauth.access_token,
+            )
+            .await?
             {
                 finish_project_setup(
                     context.app.clone(),
@@ -406,8 +410,7 @@ async fn complete_callback(
         }
         LoginMode::EnableMonitoring { project_id } => {
             let project =
-                resolve_project_by_id(context.app.as_ref(), project_id, &oauth.access_token)
-                    .await?;
+                resolve_project_by_id(context.app.as_ref(), project_id, &oauth.access_token).await?;
             enable_monitoring(context.app.as_ref(), &project, &oauth.access_token).await?;
             finish_connected_project(
                 context.app.clone(),
@@ -446,8 +449,12 @@ async fn finish_connected_project(
     oauth: OAuthSecret,
     email: Option<String>,
 ) -> Result<CallbackOutcome, String> {
-    validate_monitoring_access_with_retry(app.as_ref(), &project.project_id, &oauth.access_token)
-        .await?;
+    validate_monitoring_access_with_retry(
+        app.as_ref(),
+        &project.project_id,
+        &oauth.access_token,
+    )
+    .await?;
     save_project_selection(app.as_ref(), account_id, &project, oauth, email)?;
     let account = usage::refresh_account(app, account_id).await?;
     Ok(CallbackOutcome::Complete(account))
@@ -488,8 +495,10 @@ fn save_project_selection(
     app.store
         .mutate(account_id, |account| {
             account.provider = Provider::GoogleAiStudio;
-            account.provider_account_id =
-                Some(format!("google-ai-studio-project:{}", project.project_id));
+            account.provider_account_id = Some(format!(
+                "google-ai-studio-project:{}",
+                project.project_id
+            ));
             account.plan = Some("Google AI Studio".into());
             if email.is_some() {
                 account.email = email.clone();
@@ -582,9 +591,7 @@ async fn lookup_key_project(
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if status == StatusCode::UNAUTHORIZED {
-        return Err(
-            "Google authorization expired before the API-key project could be found.".into(),
-        );
+        return Err("Google authorization expired before the API-key project could be found.".into());
     }
     if status == StatusCode::FORBIDDEN
         || status == StatusCode::NOT_FOUND
@@ -1000,13 +1007,13 @@ fn is_waiting(app: &AppState, attempt_id: &str) -> bool {
 fn fail_login(context: &LoginContext, message: String) {
     if is_waiting(context.app.as_ref(), &context.attempt_id) {
         set_login_status(
-            context.app.as_ref(),
-            LoginStatus {
-                attempt_id: context.attempt_id.clone(),
-                status: "failed".into(),
-                message: Some(message),
-                account: None,
-            },
+  context.app.as_ref(),
+  LoginStatus {
+      attempt_id: context.attempt_id.clone(),
+      status: "failed".into(),
+      message: Some(message),
+      account: None,
+  },
         );
     }
 }

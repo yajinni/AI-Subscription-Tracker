@@ -1,6 +1,9 @@
 use crate::{
-    account_order::AccountOrderStore, alerts::AlertStore, model::LoginStatus,
-    settings::SettingsStore, store::AccountStore,
+    account_order::AccountOrderStore,
+    alerts::AlertStore,
+    model::LoginStatus,
+    settings::SettingsStore,
+    store::AccountStore,
 };
 use parking_lot::{Mutex, RwLock};
 use reqwest::Client;
@@ -102,7 +105,11 @@ impl AppState {
     }
 }
 
-fn load_with_metadata_recovery<T, F>(data_dir: &Path, file_name: &str, load: F) -> Result<T, String>
+fn load_with_metadata_recovery<T, F>(
+    data_dir: &Path,
+    file_name: &str,
+    load: F,
+) -> Result<T, String>
 where
     F: Fn() -> Result<T, String>,
 {
@@ -160,11 +167,7 @@ mod tests {
     #[test]
     fn invalid_primary_accounts_fall_back_to_backup() {
         let directory = tempfile::tempdir().unwrap();
-        fs::write(
-            directory.path().join("accounts.json"),
-            r#"{"version":2,"accounts":[{"provider":"unsupported"}]}"#,
-        )
-        .unwrap();
+        fs::write(directory.path().join("accounts.json"), r#"{"version":2,"accounts":[{"provider":"unsupported"}]}"#).unwrap();
         fs::write(
             directory.path().join("accounts.json.bak"),
             r#"{

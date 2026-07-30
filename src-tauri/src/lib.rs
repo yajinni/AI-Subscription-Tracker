@@ -141,19 +141,19 @@ fn cancel_login(
     let cancelled = {
         let mut pending = state.pending_login.write();
         let cancellable = pending.as_ref().is_some_and(|login| {
-            login.attempt_id == attempt_id
-                && matches!(
-                    login.status.as_str(),
-                    "waiting" | "choose_project" | "monitoring_disabled"
-                )
+  login.attempt_id == attempt_id
+      && matches!(
+          login.status.as_str(),
+          "waiting" | "choose_project" | "monitoring_disabled"
+      )
         });
         if cancellable {
-            *pending = Some(LoginStatus {
-                attempt_id: attempt_id.clone(),
-                status: "failed".into(),
-                message: Some("Authentication was cancelled.".into()),
-                account: None,
-            });
+  *pending = Some(LoginStatus {
+      attempt_id: attempt_id.clone(),
+      status: "failed".into(),
+      message: Some("Authentication was cancelled.".into()),
+      account: None,
+  });
         }
         cancellable
     };
@@ -165,7 +165,7 @@ fn cancel_login(
 
     for label in ["opencode-go-login", "grok-login"] {
         if let Some(window) = app.get_webview_window(label) {
-            let _ = window.destroy();
+  let _ = window.destroy();
         }
     }
     Ok(())

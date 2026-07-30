@@ -144,6 +144,7 @@ pub async fn start_login(
                 &server_context.attempt_id,
                 format!("Callback server failed: {error}"),
             );
+            server_context.app.stop_login_shutdown(&server_context.attempt_id);
         }
     });
 
@@ -728,10 +729,10 @@ fn fail_login(store: &RwLock<Option<LoginStatus>>, attempt_id: &str, message: St
         .is_some_and(|login| login.attempt_id == attempt_id && login.status == "waiting")
     {
         *pending = Some(LoginStatus {
-            attempt_id: attempt_id.into(),
-            status: "failed".into(),
-            message: Some(message),
-            account: None,
+  attempt_id: attempt_id.into(),
+  status: "failed".into(),
+  message: Some(message),
+  account: None,
         });
     }
 }
