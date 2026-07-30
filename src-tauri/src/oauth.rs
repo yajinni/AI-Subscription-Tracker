@@ -302,13 +302,20 @@ async fn complete_callback(
         last_error: None,
         auth_required: false,
     };
+    let mut pending = context.app.pending_login.write();
+    if !pending
+        .as_ref()
+        .is_some_and(|login| login.attempt_id == context.attempt_id && login.status == "waiting")
+    {
+        return Err("The login attempt was cancelled.".into());
+    }
     save_provider_secret(&account.id, &secret).map_err(|error| error.to_string())?;
     let account = context
         .app
         .store
         .upsert(account)
         .map_err(|error| error.to_string())?;
-    *context.app.pending_login.write() = Some(LoginStatus {
+    *pending = Some(LoginStatus {
         attempt_id: context.attempt_id.clone(),
         status: "complete".into(),
         message: None,

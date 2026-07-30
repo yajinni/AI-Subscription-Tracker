@@ -360,6 +360,9 @@ async fn complete_callback(
     let email = fetch_email(context.app.as_ref(), &oauth.access_token)
         .await
         .ok();
+    if !is_waiting(context.app.as_ref(), &context.attempt_id) {
+        return Err("The Google authorization was cancelled.".into());
+    }
     stored.cloud_oauth = Some(oauth.clone());
     save_provider_secret(
         &context.account_id,
@@ -518,9 +521,6 @@ fn update_account_identity(
 }
 
 fn apply_outcome(app: &AppState, attempt_id: &str, outcome: CallbackOutcome) -> Result<(), String> {
-    if !is_waiting(app, attempt_id) {
-        return Err("The Google authorization was cancelled.".into());
-    }
     let status = match outcome {
         CallbackOutcome::Complete(account) => LoginStatus {
             attempt_id: attempt_id.into(),
@@ -544,7 +544,14 @@ fn apply_outcome(app: &AppState, attempt_id: &str, outcome: CallbackOutcome) -> 
             account: None,
         },
     };
-    set_login_status(app, status);
+    let mut pending = app.pending_login.write();
+    if !pending
+        .as_ref()
+        .is_some_and(|login| login.attempt_id == attempt_id && login.status == "waiting")
+    {
+        return Err("The Google authorization was cancelled.".into());
+    }
+    *pending = Some(status);
     Ok(())
 }
 

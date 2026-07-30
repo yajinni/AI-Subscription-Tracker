@@ -18,9 +18,7 @@ use std::{
     },
     time::Duration,
 };
-use tauri::{
-    AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent,
-};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use url::Url;
 use uuid::Uuid;
 
@@ -83,11 +81,10 @@ pub async fn start_login(state: Arc<AppState>, label: String) -> Result<LoginSta
         return Err("Another provider login is already in progress.".into());
     }
 
-    let app = state
-        .app_handle
-        .read()
-        .clone()
-        .ok_or_else(|| "The desktop application is not ready to open Grok login.".to_string())?;
+    let app =
+        state.app_handle.read().clone().ok_or_else(|| {
+            "The desktop application is not ready to open Grok login.".to_string()
+        })?;
     if let Some(window) = app.get_webview_window(LOGIN_WINDOW_LABEL) {
         let _ = window.destroy();
     }
@@ -106,24 +103,21 @@ pub async fn start_login(state: Arc<AppState>, label: String) -> Result<LoginSta
 
     let login_url = Url::parse(LOGIN_URL).map_err(|error| error.to_string())?;
     let (width, height) = login_window_size(&app);
-    let login_window = WebviewWindowBuilder::new(
-        &app,
-        LOGIN_WINDOW_LABEL,
-        WebviewUrl::External(login_url),
-    )
-    .title("Connect Grok / SuperGrok")
-    .inner_size(width, height)
-    .min_inner_size(820.0, 620.0)
-    .center()
-    .resizable(true)
-    .incognito(true)
-    .devtools(false)
-    .initialization_script(CONNECT_BANNER_SCRIPT)
-    .on_navigation(|url| {
-        matches!(url.scheme(), "http" | "https") || url.as_str() == "about:blank"
-    })
-    .build()
-    .map_err(|error| format!("Unable to open the Grok login window: {error}"))?;
+    let login_window =
+        WebviewWindowBuilder::new(&app, LOGIN_WINDOW_LABEL, WebviewUrl::External(login_url))
+            .title("Connect Grok / SuperGrok")
+            .inner_size(width, height)
+            .min_inner_size(820.0, 620.0)
+            .center()
+            .resizable(true)
+            .incognito(true)
+            .devtools(false)
+            .initialization_script(CONNECT_BANNER_SCRIPT)
+            .on_navigation(|url| {
+                matches!(url.scheme(), "http" | "https") || url.as_str() == "about:blank"
+            })
+            .build()
+            .map_err(|error| format!("Unable to open the Grok login window: {error}"))?;
 
     start_cookie_poll(
         login_window.clone(),
@@ -148,10 +142,7 @@ pub async fn start_login(state: Arc<AppState>, label: String) -> Result<LoginSta
     let timeout_attempt = attempt_id.clone();
     let timeout_app = app.clone();
     tauri::async_runtime::spawn(async move {
-        tokio::time::sleep(Duration::from_secs(
-            (LOGIN_TIMEOUT_MINUTES * 60) as u64,
-        ))
-        .await;
+        tokio::time::sleep(Duration::from_secs((LOGIN_TIMEOUT_MINUTES * 60) as u64)).await;
         if is_waiting(&timeout_state, &timeout_attempt) {
             fail_if_waiting(
                 &timeout_state,
@@ -251,6 +242,11 @@ async fn complete_cookie_login(
             return;
         }
     };
+
+    if !is_waiting(&state, &attempt_id) {
+        let _ = window.destroy();
+        return;
+    }
 
     let duplicate = state
         .store
@@ -362,13 +358,26 @@ async fn complete_cookie_login(
         },
     };
 
-    *state.pending_login.write() = Some(LoginStatus {
-        attempt_id,
-        status: "complete".into(),
-        message: None,
-        account: Some(account),
-    });
-    let _ = window.destroy();
+    let completed = {
+        let mut pending = state.pending_login.write();
+        if pending
+            .as_ref()
+            .is_some_and(|login| login.attempt_id == attempt_id && login.status == "waiting")
+        {
+            *pending = Some(LoginStatus {
+                attempt_id,
+                status: "complete".into(),
+                message: None,
+                account: Some(account),
+            });
+            true
+        } else {
+            false
+        }
+    };
+    if completed {
+        let _ = window.destroy();
+    }
 }
 
 fn read_cookie_header(window: &WebviewWindow) -> Result<String, String> {
