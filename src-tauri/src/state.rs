@@ -1,9 +1,6 @@
 use crate::{
-    account_order::AccountOrderStore,
-    alerts::AlertStore,
-    model::LoginStatus,
-    settings::SettingsStore,
-    store::AccountStore,
+    account_order::AccountOrderStore, alerts::AlertStore, model::LoginStatus,
+    settings::SettingsStore, store::AccountStore,
 };
 use parking_lot::{Mutex, RwLock};
 use reqwest::Client;
@@ -15,7 +12,7 @@ use std::{
     time::Duration,
 };
 use tauri::AppHandle;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{oneshot, Mutex as AsyncMutex};
 
 #[derive(Clone, Debug)]
 pub struct ApiRuntime {
@@ -31,6 +28,7 @@ pub struct AppState {
     pub settings: SettingsStore,
     pub client: Client,
     pub pending_login: RwLock<Option<LoginStatus>>,
+    login_shutdowns: Mutex<HashMap<String, oneshot::Sender<()>>>,
     pub bridge_token: RwLock<String>,
     pub api_runtime: RwLock<ApiRuntime>,
     pub app_handle: RwLock<Option<AppHandle>>,
@@ -66,6 +64,7 @@ impl AppState {
             settings,
             client,
             pending_login: RwLock::new(None),
+            login_shutdowns: Mutex::new(HashMap::new()),
             bridge_token: RwLock::new(bridge_token),
             api_runtime: RwLock::new(ApiRuntime {
                 endpoint: "http://127.0.0.1:47831/v1/paseo-usage".into(),
@@ -82,6 +81,18 @@ impl AppState {
         *self.app_handle.write() = Some(app_handle);
     }
 
+    pub fn register_login_shutdown(&self, attempt_id: String, sender: oneshot::Sender<()>) {
+        if let Some(previous) = self.login_shutdowns.lock().insert(attempt_id, sender) {
+            let _ = previous.send(());
+        }
+    }
+
+    pub fn stop_login_shutdown(&self, attempt_id: &str) {
+        if let Some(sender) = self.login_shutdowns.lock().remove(attempt_id) {
+            let _ = sender.send(());
+        }
+    }
+
     pub fn account_lock(&self, account_id: &str) -> Arc<AsyncMutex<()>> {
         let mut locks = self.account_locks.lock();
         locks
@@ -91,11 +102,7 @@ impl AppState {
     }
 }
 
-fn load_with_metadata_recovery<T, F>(
-    data_dir: &Path,
-    file_name: &str,
-    load: F,
-) -> Result<T, String>
+fn load_with_metadata_recovery<T, F>(data_dir: &Path, file_name: &str, load: F) -> Result<T, String>
 where
     F: Fn() -> Result<T, String>,
 {
@@ -153,7 +160,11 @@ mod tests {
     #[test]
     fn invalid_primary_accounts_fall_back_to_backup() {
         let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join("accounts.json"), r#"{"version":2,"accounts":[{"provider":"unsupported"}]}"#).unwrap();
+        fs::write(
+            directory.path().join("accounts.json"),
+            r#"{"version":2,"accounts":[{"provider":"unsupported"}]}"#,
+        )
+        .unwrap();
         fs::write(
             directory.path().join("accounts.json.bak"),
             r#"{

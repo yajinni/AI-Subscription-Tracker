@@ -47,7 +47,6 @@ struct LoginContext {
     mode: LoginMode,
     expected_state: String,
     redirect_uri: String,
-    shutdown: Arc<tokio::sync::Mutex<Option<oneshot::Sender<()>>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,6 +191,7 @@ async fn start_oauth(
     );
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    app.register_login_shutdown(attempt_id.clone(), shutdown_tx);
     let context = Arc::new(LoginContext {
         app: app.clone(),
         attempt_id: attempt_id.clone(),
@@ -199,7 +199,6 @@ async fn start_oauth(
         mode,
         expected_state,
         redirect_uri,
-        shutdown: Arc::new(tokio::sync::Mutex::new(Some(shutdown_tx))),
     });
     let router = Router::new()
         .route("/", get(callback))
@@ -331,9 +330,15 @@ async fn complete_callback(
     if query.state.as_deref() != Some(context.expected_state.as_str()) {
         return Err("OAuth state validation failed.".into());
     }
+    if !is_waiting(context.app.as_ref(), &context.attempt_id) {
+        return Err("The Google authorization was cancelled.".into());
+    }
 
     let mut stored = load_google_ai_studio_secret(&context.account_id)?;
     let tokens = exchange_tokens(&context, &code).await?;
+    if !is_waiting(context.app.as_ref(), &context.attempt_id) {
+        return Err("The Google authorization was cancelled.".into());
+    }
     let refresh_token = tokens
         .refresh_token
         .or_else(|| {
@@ -365,12 +370,9 @@ async fn complete_callback(
 
     let outcome = match &context.mode {
         LoginMode::Connect => {
-            if let Some(project) = lookup_key_project(
-                context.app.as_ref(),
-                &stored.api_key,
-                &oauth.access_token,
-            )
-            .await?
+            if let Some(project) =
+                lookup_key_project(context.app.as_ref(), &stored.api_key, &oauth.access_token)
+                    .await?
             {
                 finish_project_setup(
                     context.app.clone(),
@@ -401,7 +403,8 @@ async fn complete_callback(
         }
         LoginMode::EnableMonitoring { project_id } => {
             let project =
-                resolve_project_by_id(context.app.as_ref(), project_id, &oauth.access_token).await?;
+                resolve_project_by_id(context.app.as_ref(), project_id, &oauth.access_token)
+                    .await?;
             enable_monitoring(context.app.as_ref(), &project, &oauth.access_token).await?;
             finish_connected_project(
                 context.app.clone(),
@@ -440,12 +443,8 @@ async fn finish_connected_project(
     oauth: OAuthSecret,
     email: Option<String>,
 ) -> Result<CallbackOutcome, String> {
-    validate_monitoring_access_with_retry(
-        app.as_ref(),
-        &project.project_id,
-        &oauth.access_token,
-    )
-    .await?;
+    validate_monitoring_access_with_retry(app.as_ref(), &project.project_id, &oauth.access_token)
+        .await?;
     save_project_selection(app.as_ref(), account_id, &project, oauth, email)?;
     let account = usage::refresh_account(app, account_id).await?;
     Ok(CallbackOutcome::Complete(account))
@@ -486,10 +485,8 @@ fn save_project_selection(
     app.store
         .mutate(account_id, |account| {
             account.provider = Provider::GoogleAiStudio;
-            account.provider_account_id = Some(format!(
-                "google-ai-studio-project:{}",
-                project.project_id
-            ));
+            account.provider_account_id =
+                Some(format!("google-ai-studio-project:{}", project.project_id));
             account.plan = Some("Google AI Studio".into());
             if email.is_some() {
                 account.email = email.clone();
@@ -521,6 +518,9 @@ fn update_account_identity(
 }
 
 fn apply_outcome(app: &AppState, attempt_id: &str, outcome: CallbackOutcome) -> Result<(), String> {
+    if !is_waiting(app, attempt_id) {
+        return Err("The Google authorization was cancelled.".into());
+    }
     let status = match outcome {
         CallbackOutcome::Complete(account) => LoginStatus {
             attempt_id: attempt_id.into(),
@@ -575,7 +575,9 @@ async fn lookup_key_project(
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if status == StatusCode::UNAUTHORIZED {
-        return Err("Google authorization expired before the API-key project could be found.".into());
+        return Err(
+            "Google authorization expired before the API-key project could be found.".into(),
+        );
     }
     if status == StatusCode::FORBIDDEN
         || status == StatusCode::NOT_FOUND
@@ -981,22 +983,29 @@ fn set_login_status(app: &AppState, status: LoginStatus) {
     *app.pending_login.write() = Some(status);
 }
 
+fn is_waiting(app: &AppState, attempt_id: &str) -> bool {
+    app.pending_login
+        .read()
+        .as_ref()
+        .is_some_and(|login| login.attempt_id == attempt_id && login.status == "waiting")
+}
+
 fn fail_login(context: &LoginContext, message: String) {
-    set_login_status(
-        context.app.as_ref(),
-        LoginStatus {
-            attempt_id: context.attempt_id.clone(),
-            status: "failed".into(),
-            message: Some(message),
-            account: None,
-        },
-    );
+    if is_waiting(context.app.as_ref(), &context.attempt_id) {
+        set_login_status(
+            context.app.as_ref(),
+            LoginStatus {
+                attempt_id: context.attempt_id.clone(),
+                status: "failed".into(),
+                message: Some(message),
+                account: None,
+            },
+        );
+    }
 }
 
 async fn stop_callback(context: &LoginContext) {
-    if let Some(shutdown) = context.shutdown.lock().await.take() {
-        let _ = shutdown.send(());
-    }
+    context.app.stop_login_shutdown(&context.attempt_id);
 }
 
 fn escape_html(value: &str) -> String {
