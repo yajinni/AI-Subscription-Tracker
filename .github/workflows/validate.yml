@@ -6,43 +6,10 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
   statuses: write
 
 jobs:
-  apply-dashboard-patch:
-    if: github.event_name == 'pull_request' && github.head_ref == 'ai/compact-cards-trello-reorder'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Apply focused dashboard patch
-        run: python .github/dashboard_patch.py
-      - name: Install dependencies
-        run: npm install
-      - name: TypeScript check
-        run: npm run check
-      - name: Production build
-        run: npm run build
-      - name: Commit product-only changes
-        shell: bash
-        run: |
-          git fetch origin main
-          git checkout origin/main -- .github/workflows/validate.yml
-          rm .github/workflows/apply-compact-cards-trello-reorder.yml
-          rm .github/workflows/run-compact-cards-patch.yml
-          rm .github/dashboard_patch.py
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md src/App.tsx src/ui-refinements.css src/dashboard-reorder.ts src/dashboard-reorder.css .github/workflows/validate.yml .github/workflows/apply-compact-cards-trello-reorder.yml .github/workflows/run-compact-cards-patch.yml .github/dashboard_patch.py
-          git commit -m "improve compact account cards and live reorder preview"
-          git push origin HEAD:${GITHUB_HEAD_REF}
-
   frontend:
     runs-on: ubuntu-latest
     steps:
