@@ -1,0 +1,138 @@
+name: Fix cancellation block formatting
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/fix-cancel-block-formatting.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Correct focused Rust indentation
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "src-tauri/src/lib.rs",
+              '''        let cancellable = pending.as_ref().is_some_and(|login| {
+  login.attempt_id == attempt_id
+      && matches!(
+          login.status.as_str(),
+          "waiting" | "choose_project" | "monitoring_disabled"
+      )
+        });
+        if cancellable {
+  *pending = Some(LoginStatus {
+      attempt_id: attempt_id.clone(),
+      status: "failed".into(),
+      message: Some("Authentication was cancelled.".into()),
+      account: None,
+  });
+        }
+''',
+              '''        let cancellable = pending.as_ref().is_some_and(|login| {
+            login.attempt_id == attempt_id
+                && matches!(
+                    login.status.as_str(),
+                    "waiting" | "choose_project" | "monitoring_disabled"
+                )
+        });
+        if cancellable {
+            *pending = Some(LoginStatus {
+                attempt_id: attempt_id.clone(),
+                status: "failed".into(),
+                message: Some("Authentication was cancelled.".into()),
+                account: None,
+            });
+        }
+''',
+          )
+          replace_once(
+              "src-tauri/src/lib.rs",
+              '''        if let Some(window) = app.get_webview_window(label) {
+  let _ = window.destroy();
+        }
+''',
+              '''        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.destroy();
+        }
+''',
+          )
+          replace_once(
+              "src-tauri/src/oauth.rs",
+              '''        *pending = Some(LoginStatus {
+  attempt_id: attempt_id.into(),
+  status: "failed".into(),
+  message: Some(message),
+  account: None,
+        });
+''',
+              '''        *pending = Some(LoginStatus {
+            attempt_id: attempt_id.into(),
+            status: "failed".into(),
+            message: Some(message),
+            account: None,
+        });
+''',
+          )
+          replace_once(
+              "src-tauri/src/google_ai_studio_oauth.rs",
+              '''        set_login_status(
+  context.app.as_ref(),
+  LoginStatus {
+      attempt_id: context.attempt_id.clone(),
+      status: "failed".into(),
+      message: Some(message),
+      account: None,
+  },
+        );
+''',
+              '''        set_login_status(
+            context.app.as_ref(),
+            LoginStatus {
+                attempt_id: context.attempt_id.clone(),
+                status: "failed".into(),
+                message: Some(message),
+                account: None,
+            },
+        );
+''',
+          )
+          PY
+      - name: Validate frontend
+        run: |
+          npm install
+          npm run check
+          npm run build
+      - name: Commit formatting correction
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/lib.rs src-tauri/src/oauth.rs src-tauri/src/google_ai_studio_oauth.rs
+          git commit -m "Correct authentication cancellation formatting"
+          git push origin HEAD:${{ github.head_ref }}
