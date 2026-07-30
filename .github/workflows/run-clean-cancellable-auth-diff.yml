@@ -1,0 +1,57 @@
+name: Run cancellable authentication diff cleanup
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/run-clean-cancellable-auth-diff.yml
+
+permissions:
+  contents: write
+
+jobs:
+  clean-and-validate:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Restore base Rust files and extract focused patch
+        shell: bash
+        run: |
+          for file in \
+            src-tauri/src/state.rs \
+            src-tauri/src/lib.rs \
+            src-tauri/src/oauth.rs \
+            src-tauri/src/google_ai_studio_oauth.rs \
+            src-tauri/src/grok_login.rs \
+            src-tauri/src/opencode_login.rs; do
+            git show origin/main:"$file" > "$file"
+          done
+          awk '
+            /python3 <<'\''PY'\''/ { capture=1; next }
+            capture && /^          PY$/ { capture=0; exit }
+            capture { sub(/^          /, ""); print }
+          ' .github/workflows/clean-cancellable-auth-diff.yml > /tmp/clean.py
+          test -s /tmp/clean.py
+          python3 /tmp/clean.py
+      - name: Install frontend dependencies
+        run: npm install
+      - name: Validate frontend
+        run: |
+          npm run check
+          npm run build
+      - name: Commit focused Rust diff
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/state.rs src-tauri/src/lib.rs src-tauri/src/oauth.rs src-tauri/src/google_ai_studio_oauth.rs src-tauri/src/grok_login.rs src-tauri/src/opencode_login.rs
+          git commit -m "Keep authentication cancellation diff focused"
+          git push origin HEAD:${{ github.head_ref }}
