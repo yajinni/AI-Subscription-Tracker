@@ -1,0 +1,193 @@
+name: Clean cancellable authentication diff
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/clean-cancellable-auth-diff.yml
+
+permissions:
+  contents: write
+
+jobs:
+  clean-and-validate:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Restore base formatting and apply focused Rust changes
+        shell: bash
+        run: |
+          for file in \
+            src-tauri/src/state.rs \
+            src-tauri/src/lib.rs \
+            src-tauri/src/oauth.rs \
+            src-tauri/src/google_ai_studio_oauth.rs \
+            src-tauri/src/grok_login.rs \
+            src-tauri/src/opencode_login.rs; do
+            git show origin/main:"$file" > "$file"
+          done
+
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def exact(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected 1 exact match, found {count}: {old[:100]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          def regex(path: str, pattern: str, replacement: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected 1 regex match, found {count}: {pattern[:100]!r}")
+              p.write_text(updated)
+
+          # Shared state owns callback shutdown handles so cancellation can stop loopback servers.
+          exact("src-tauri/src/state.rs", "use tokio::sync::Mutex as AsyncMutex;\n", "use tokio::sync::{oneshot, Mutex as AsyncMutex};\n")
+          exact("src-tauri/src/state.rs", "    pub pending_login: RwLock<Option<LoginStatus>>,\n    pub bridge_token: RwLock<String>,\n", "    pub pending_login: RwLock<Option<LoginStatus>>,\n    login_shutdowns: Mutex<HashMap<String, oneshot::Sender<()>>>,\n    pub bridge_token: RwLock<String>,\n")
+          exact("src-tauri/src/state.rs", "            pending_login: RwLock::new(None),\n            bridge_token: RwLock::new(bridge_token),\n", "            pending_login: RwLock::new(None),\n            login_shutdowns: Mutex::new(HashMap::new()),\n            bridge_token: RwLock::new(bridge_token),\n")
+          exact("src-tauri/src/state.rs", "    pub fn set_app_handle(&self, app_handle: AppHandle) {\n        *self.app_handle.write() = Some(app_handle);\n    }\n\n    pub fn account_lock", "    pub fn set_app_handle(&self, app_handle: AppHandle) {\n        *self.app_handle.write() = Some(app_handle);\n    }\n\n    pub fn register_login_shutdown(&self, attempt_id: String, sender: oneshot::Sender<()>) {\n        if let Some(previous) = self.login_shutdowns.lock().insert(attempt_id, sender) {\n            let _ = previous.send(());\n        }\n    }\n\n    pub fn stop_login_shutdown(&self, attempt_id: &str) {\n        if let Some(sender) = self.login_shutdowns.lock().remove(attempt_id) {\n            let _ = sender.send(());\n        }\n    }\n\n    pub fn account_lock")
+
+          # Backend command atomically invalidates the matching attempt and closes embedded auth windows.
+          exact("src-tauri/src/lib.rs", "#[tauri::command]\nasync fn refresh_account(\n", '''#[tauri::command]
+fn cancel_login(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    attempt_id: String,
+) -> Result<(), String> {
+    let cancelled = {
+        let mut pending = state.pending_login.write();
+        let cancellable = pending.as_ref().is_some_and(|login| {
+            login.attempt_id == attempt_id
+                && matches!(
+                    login.status.as_str(),
+                    "waiting" | "choose_project" | "monitoring_disabled"
+                )
+        });
+        if cancellable {
+            *pending = Some(LoginStatus {
+                attempt_id: attempt_id.clone(),
+                status: "failed".into(),
+                message: Some("Authentication was cancelled.".into()),
+                account: None,
+            });
+        }
+        cancellable
+    };
+
+    state.stop_login_shutdown(&attempt_id);
+    if !cancelled {
+        return Ok(());
+    }
+
+    for label in ["opencode-go-login", "grok-login"] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.destroy();
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn refresh_account(
+''')
+          exact("src-tauri/src/lib.rs", "            get_login_status,\n            refresh_account,\n", "            get_login_status,\n            cancel_login,\n            refresh_account,\n")
+
+          # Standard OAuth callback servers become cancellable and stale callbacks cannot commit.
+          exact("src-tauri/src/oauth.rs", "    redirect_uri: String,\n    shutdown: Arc<tokio::sync::Mutex<Option<oneshot::Sender<()>>>>,\n", "    redirect_uri: String,\n")
+          exact("src-tauri/src/oauth.rs", "    let (shutdown_tx, shutdown_rx) = oneshot::channel();\n    let context = Arc::new(LoginContext {\n", "    let (shutdown_tx, shutdown_rx) = oneshot::channel();\n    app.register_login_shutdown(attempt_id.clone(), shutdown_tx);\n    let context = Arc::new(LoginContext {\n")
+          exact("src-tauri/src/oauth.rs", "        expected_state,\n        redirect_uri,\n        shutdown: Arc::new(tokio::sync::Mutex::new(Some(shutdown_tx))),\n    });\n", "        expected_state,\n        redirect_uri,\n    });\n")
+          exact("src-tauri/src/oauth.rs", "                format!(\"Callback server failed: {error}\"),\n            );\n        }\n", "                format!(\"Callback server failed: {error}\"),\n            );\n            server_context.app.stop_login_shutdown(&server_context.attempt_id);\n        }\n")
+          exact("src-tauri/src/oauth.rs", "    Ok(status.clone())\n}\n\nasync fn callback", "    Ok(status.clone())\n}\n\nfn is_waiting(app: &AppState, attempt_id: &str) -> bool {\n    app.pending_login\n        .read()\n        .as_ref()\n        .is_some_and(|login| login.attempt_id == attempt_id && login.status == \"waiting\")\n}\n\nasync fn callback")
+          exact("src-tauri/src/oauth.rs", "    if query.state.as_deref() != Some(context.expected_state.as_str()) {\n        return Err(\"OAuth state validation failed.\".into());\n    }\n\n    let (secret, identity) = exchange_tokens(&context, &code).await?;\n", "    if query.state.as_deref() != Some(context.expected_state.as_str()) {\n        return Err(\"OAuth state validation failed.\".into());\n    }\n    if !is_waiting(context.app.as_ref(), &context.attempt_id) {\n        return Err(\"The login attempt was cancelled.\".into());\n    }\n\n    let (secret, identity) = exchange_tokens(&context, &code).await?;\n    if !is_waiting(context.app.as_ref(), &context.attempt_id) {\n        return Err(\"The login attempt was cancelled.\".into());\n    }\n")
+          exact("src-tauri/src/oauth.rs", "    save_provider_secret(&account.id, &secret).map_err(|error| error.to_string())?;\n    let account = context\n        .app\n        .store\n        .upsert(account)\n        .map_err(|error| error.to_string())?;\n    *context.app.pending_login.write() = Some(LoginStatus {\n", "    let mut pending = context.app.pending_login.write();\n    if !pending\n        .as_ref()\n        .is_some_and(|login| login.attempt_id == context.attempt_id && login.status == \"waiting\")\n    {\n        return Err(\"The login attempt was cancelled.\".into());\n    }\n    save_provider_secret(&account.id, &secret).map_err(|error| error.to_string())?;\n    let account = context\n        .app\n        .store\n        .upsert(account)\n        .map_err(|error| error.to_string())?;\n    *pending = Some(LoginStatus {\n")
+          regex("src-tauri/src/oauth.rs", r"fn fail_login\(store: &RwLock<Option<LoginStatus>>, attempt_id: &str, message: String\) \{.*?\n\}\n\nasync fn stop_callback\(context: &LoginContext\) \{.*?\n\}", '''fn fail_login(store: &RwLock<Option<LoginStatus>>, attempt_id: &str, message: String) {
+    let mut pending = store.write();
+    if pending
+        .as_ref()
+        .is_some_and(|login| login.attempt_id == attempt_id && login.status == "waiting")
+    {
+        *pending = Some(LoginStatus {
+            attempt_id: attempt_id.into(),
+            status: "failed".into(),
+            message: Some(message),
+            account: None,
+        });
+    }
+}
+
+async fn stop_callback(context: &LoginContext) {
+    context.app.stop_login_shutdown(&context.attempt_id);
+}''')
+
+          # Google Cloud OAuth follows the same cancellation contract.
+          exact("src-tauri/src/google_ai_studio_oauth.rs", "    redirect_uri: String,\n    shutdown: Arc<tokio::sync::Mutex<Option<oneshot::Sender<()>>>>,\n", "    redirect_uri: String,\n")
+          exact("src-tauri/src/google_ai_studio_oauth.rs", "    let (shutdown_tx, shutdown_rx) = oneshot::channel();\n    let context = Arc::new(LoginContext {\n", "    let (shutdown_tx, shutdown_rx) = oneshot::channel();\n    app.register_login_shutdown(attempt_id.clone(), shutdown_tx);\n    let context = Arc::new(LoginContext {\n")
+          exact("src-tauri/src/google_ai_studio_oauth.rs", "        expected_state,\n        redirect_uri,\n        shutdown: Arc::new(tokio::sync::Mutex::new(Some(shutdown_tx))),\n    });\n", "        expected_state,\n        redirect_uri,\n    });\n")
+          exact("src-tauri/src/google_ai_studio_oauth.rs", "                format!(\"Google Cloud callback server failed: {error}\"),\n            );\n        }\n", "                format!(\"Google Cloud callback server failed: {error}\"),\n            );\n            server_context.app.stop_login_shutdown(&server_context.attempt_id);\n        }\n")
+          exact("src-tauri/src/google_ai_studio_oauth.rs", "    if query.state.as_deref() != Some(context.expected_state.as_str()) {\n        return Err(\"OAuth state validation failed.\".into());\n    }\n\n    let mut stored", "    if query.state.as_deref() != Some(context.expected_state.as_str()) {\n        return Err(\"OAuth state validation failed.\".into());\n    }\n    if !is_waiting(context.app.as_ref(), &context.attempt_id) {\n        return Err(\"The Google authorization was cancelled.\".into());\n    }\n\n    let mut stored")
+          exact("src-tauri/src/google_ai_studio_oauth.rs", "    let tokens = exchange_tokens(&context, &code).await?;\n    let refresh_token", "    let tokens = exchange_tokens(&context, &code).await?;\n    if !is_waiting(context.app.as_ref(), &context.attempt_id) {\n        return Err(\"The Google authorization was cancelled.\".into());\n    }\n    let refresh_token")
+          exact("src-tauri/src/google_ai_studio_oauth.rs", "    let email = fetch_email(context.app.as_ref(), &oauth.access_token)\n        .await\n        .ok();\n    stored.cloud_oauth", "    let email = fetch_email(context.app.as_ref(), &oauth.access_token)\n        .await\n        .ok();\n    if !is_waiting(context.app.as_ref(), &context.attempt_id) {\n        return Err(\"The Google authorization was cancelled.\".into());\n    }\n    stored.cloud_oauth")
+          regex("src-tauri/src/google_ai_studio_oauth.rs", r"fn apply_outcome\(app: &AppState, attempt_id: &str, outcome: CallbackOutcome\) -> Result<\(\), String> \{(.*?)\n    set_login_status\(app, status\);\n    Ok\(\(\)\)\n\}", lambda m: "fn apply_outcome(app: &AppState, attempt_id: &str, outcome: CallbackOutcome) -> Result<(), String> {" + m.group(1) + "\n    let mut pending = app.pending_login.write();\n    if !pending\n        .as_ref()\n        .is_some_and(|login| login.attempt_id == attempt_id && login.status == \"waiting\")\n    {\n        return Err(\"The Google authorization was cancelled.\".into());\n    }\n    *pending = Some(status);\n    Ok(())\n}")
+          regex("src-tauri/src/google_ai_studio_oauth.rs", r"fn set_login_status\(app: &AppState, status: LoginStatus\) \{.*?\n\}\n\nfn fail_login\(context: &LoginContext, message: String\) \{.*?\n\}\n\nasync fn stop_callback\(context: &LoginContext\) \{.*?\n\}", '''fn set_login_status(app: &AppState, status: LoginStatus) {
+    *app.pending_login.write() = Some(status);
+}
+
+fn is_waiting(app: &AppState, attempt_id: &str) -> bool {
+    app.pending_login
+        .read()
+        .as_ref()
+        .is_some_and(|login| login.attempt_id == attempt_id && login.status == "waiting")
+}
+
+fn fail_login(context: &LoginContext, message: String) {
+    if is_waiting(context.app.as_ref(), &context.attempt_id) {
+        set_login_status(
+            context.app.as_ref(),
+            LoginStatus {
+                attempt_id: context.attempt_id.clone(),
+                status: "failed".into(),
+                message: Some(message),
+                account: None,
+            },
+        );
+    }
+}
+
+async fn stop_callback(context: &LoginContext) {
+    context.app.stop_login_shutdown(&context.attempt_id);
+}''')
+
+          # Embedded provider completions only win while their exact attempt is still waiting.
+          exact("src-tauri/src/grok_login.rs", "    };\n\n    let duplicate = state\n", "    };\n\n    if !is_waiting(&state, &attempt_id) {\n        let _ = window.destroy();\n        return;\n    }\n\n    let duplicate = state\n")
+          exact("src-tauri/src/grok_login.rs", "    *state.pending_login.write() = Some(LoginStatus {\n        attempt_id,\n        status: \"complete\".into(),\n        message: None,\n        account: Some(account),\n    });\n    let _ = window.destroy();\n", "    let completed = {\n        let mut pending = state.pending_login.write();\n        if pending\n            .as_ref()\n            .is_some_and(|login| login.attempt_id == attempt_id && login.status == \"waiting\")\n        {\n            *pending = Some(LoginStatus {\n                attempt_id,\n                status: \"complete\".into(),\n                message: None,\n                account: Some(account),\n            });\n            true\n        } else {\n            false\n        }\n    };\n    if completed {\n        let _ = window.destroy();\n    }\n")
+          exact("src-tauri/src/opencode_login.rs", "        Ok(account) => {\n            *state.pending_login.write() = Some(LoginStatus {\n                attempt_id,\n                status: \"complete\".into(),\n                message: None,\n                account: Some(account),\n            });\n            let _ = window.destroy();\n        }\n", "        Ok(account) => {\n            let completed = {\n                let mut pending = state.pending_login.write();\n                if pending.as_ref().is_some_and(|login| {\n                    login.attempt_id == attempt_id && login.status == \"waiting\"\n                }) {\n                    *pending = Some(LoginStatus {\n                        attempt_id,\n                        status: \"complete\".into(),\n                        message: None,\n                        account: Some(account),\n                    });\n                    true\n                } else {\n                    false\n                }\n            };\n            if completed {\n                let _ = window.destroy();\n            }\n        }\n")
+          PY
+
+      - name: Install frontend dependencies
+        run: npm install
+      - name: Validate frontend
+        run: |
+          npm run check
+          npm run build
+      - name: Commit focused Rust diff
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/state.rs src-tauri/src/lib.rs src-tauri/src/oauth.rs src-tauri/src/google_ai_studio_oauth.rs src-tauri/src/grok_login.rs src-tauri/src/opencode_login.rs
+          git commit -m "Keep authentication cancellation diff focused"
+          git push origin HEAD:${{ github.head_ref }}
