@@ -1,3 +1,4 @@
+# Temporary branch-only executor; remove before merge.
 name: Run authentication race safety v2
 
 on:
@@ -46,7 +47,7 @@ jobs:
       - name: Commit race-safety changes
         shell: bash
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name "github-actions[bot]]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src-tauri/src/grok_login.rs src-tauri/src/google_ai_studio_oauth.rs src-tauri/src/lib.rs src-tauri/src/oauth.rs src-tauri/src/opencode_login.rs
           git commit -m "Prevent stale authentication completion after cancel"
