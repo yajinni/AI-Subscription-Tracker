@@ -1,0 +1,73 @@
+name: Verify v0.2.42 release
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/verify-release-v0.2.42.yml
+
+permissions:
+  contents: read
+
+jobs:
+  release-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for and verify published v0.2.42 release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: 0b7b2316906df799c78498c0995ccb4e35b611ce
+        run: |
+          set -euo pipefail
+
+          ready=false
+          for attempt in $(seq 1 90); do
+            if ! gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v0.2.42" > release.json 2>/dev/null; then
+              echo "Waiting for v0.2.42 release (${attempt}/90)..."
+              sleep 10
+              continue
+            fi
+
+            jq -r '.assets[].name' release.json > asset-names.txt
+            if ! grep -qE -- '-setup\.exe$' asset-names.txt \
+              || ! grep -qE -- '\.msi$' asset-names.txt \
+              || ! grep -qiE -- '(aarch64|arm64).*(\.dmg|\.app\.tar\.gz)$' asset-names.txt \
+              || ! grep -qiE -- '(x64|x86_64).*(\.dmg|\.app\.tar\.gz)$' asset-names.txt \
+              || ! grep -qFx -- 'latest.json' asset-names.txt; then
+              echo "Release exists but platform assets are still uploading (${attempt}/90)..."
+              sleep 10
+              continue
+            fi
+
+            latest_id="$(jq -r '.assets[] | select(.name == "latest.json") | .id' release.json)"
+            if ! gh api -H 'Accept: application/octet-stream' \
+              "repos/${GITHUB_REPOSITORY}/releases/assets/${latest_id}" > latest.json 2>/dev/null; then
+              echo "Updater metadata is not downloadable yet (${attempt}/90)..."
+              sleep 10
+              continue
+            fi
+
+            if jq -e '(.version == "0.2.42") and ((.platforms | keys | length) >= 3) and all(.platforms[]; (.url | contains("/releases/assets/")) and (.signature | length > 0))' latest.json >/dev/null; then
+              ready=true
+              break
+            fi
+
+            echo "Updater metadata is still being assembled (${attempt}/90)..."
+            sleep 10
+          done
+
+          test "$ready" = "true"
+          test "$(jq -r '.tag_name' release.json)" = "v0.2.42"
+          test "$(jq -r '.draft' release.json)" = "false"
+          test "$(jq -r '.prerelease' release.json)" = "false"
+
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v0.2.42" --jq '.object.sha')"
+          test "$tag_sha" = "$EXPECTED_SHA"
+
+          echo "Published release assets:"
+          jq -r '.assets[] | "\(.name)\t\(.size) bytes\t\(.state)"' release.json
+          jq -e '(.assets | length) > 0' release.json >/dev/null
+          jq -e 'all(.assets[]; .state == "uploaded" and .size > 0)' release.json >/dev/null
+
+          echo "Updater metadata:"
+          jq . latest.json
