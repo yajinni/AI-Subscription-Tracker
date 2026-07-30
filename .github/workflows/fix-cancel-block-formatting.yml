@@ -1,3 +1,4 @@
+# Temporary branch-only executor; remove before merge.
 name: Fix cancellation block formatting
 
 on:
