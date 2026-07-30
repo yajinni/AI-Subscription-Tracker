@@ -1,3 +1,4 @@
+# Temporary branch-only executor; remove before merge.
 name: Run cancellable authentication diff cleanup
 
 on:
