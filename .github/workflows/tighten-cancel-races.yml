@@ -1,0 +1,313 @@
+name: Tighten authentication cancellation races
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/tighten-cancel-races.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply race-safety patch
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}: {old[:120]!r}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "src-tauri/src/lib.rs",
+              '''fn cancel_login(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    attempt_id: String,
+) -> Result<(), String> {
+    let should_cancel = state.pending_login.read().as_ref().is_some_and(|login| {
+        login.attempt_id == attempt_id
+            && matches!(
+                login.status.as_str(),
+                "waiting" | "choose_project" | "monitoring_disabled"
+            )
+    });
+
+    state.stop_login_shutdown(&attempt_id);
+    if !should_cancel {
+        return Ok(());
+    }
+
+    {
+        let mut pending = state.pending_login.write();
+        if pending
+            .as_ref()
+            .is_some_and(|login| login.attempt_id == attempt_id)
+        {
+            *pending = Some(LoginStatus {
+                attempt_id: attempt_id.clone(),
+                status: "failed".into(),
+                message: Some("Authentication was cancelled.".into()),
+                account: None,
+            });
+        }
+    }
+
+    for label in ["opencode-go-login", "grok-login"] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.destroy();
+        }
+    }
+    Ok(())
+}
+''',
+              '''fn cancel_login(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    attempt_id: String,
+) -> Result<(), String> {
+    let cancelled = {
+        let mut pending = state.pending_login.write();
+        let cancellable = pending.as_ref().is_some_and(|login| {
+            login.attempt_id == attempt_id
+                && matches!(
+                    login.status.as_str(),
+                    "waiting" | "choose_project" | "monitoring_disabled"
+                )
+        });
+        if cancellable {
+            *pending = Some(LoginStatus {
+                attempt_id: attempt_id.clone(),
+                status: "failed".into(),
+                message: Some("Authentication was cancelled.".into()),
+                account: None,
+            });
+        }
+        cancellable
+    };
+
+    state.stop_login_shutdown(&attempt_id);
+    if !cancelled {
+        return Ok(());
+    }
+
+    for label in ["opencode-go-login", "grok-login"] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.destroy();
+        }
+    }
+    Ok(())
+}
+''',
+          )
+
+          replace_once(
+              "src-tauri/src/oauth.rs",
+              '''    save_provider_secret(&account.id, &secret).map_err(|error| error.to_string())?;
+    let account = context
+        .app
+        .store
+        .upsert(account)
+        .map_err(|error| error.to_string())?;
+    *context.app.pending_login.write() = Some(LoginStatus {
+        attempt_id: context.attempt_id.clone(),
+        status: "complete".into(),
+        message: None,
+        account: Some(account.clone()),
+    });
+    Ok(account)
+''',
+              '''    let mut pending = context.app.pending_login.write();
+    if !pending.as_ref().is_some_and(|login| {
+        login.attempt_id == context.attempt_id && login.status == "waiting"
+    }) {
+        return Err("The login attempt was cancelled.".into());
+    }
+    save_provider_secret(&account.id, &secret).map_err(|error| error.to_string())?;
+    let account = context
+        .app
+        .store
+        .upsert(account)
+        .map_err(|error| error.to_string())?;
+    *pending = Some(LoginStatus {
+        attempt_id: context.attempt_id.clone(),
+        status: "complete".into(),
+        message: None,
+        account: Some(account.clone()),
+    });
+    Ok(account)
+''',
+          )
+
+          replace_once(
+              "src-tauri/src/google_ai_studio_oauth.rs",
+              '''    stored.cloud_oauth = Some(oauth.clone());
+    save_provider_secret(
+''',
+              '''    if !is_waiting(context.app.as_ref(), &context.attempt_id) {
+        return Err("The Google authorization was cancelled.".into());
+    }
+    stored.cloud_oauth = Some(oauth.clone());
+    save_provider_secret(
+''',
+          )
+          replace_once(
+              "src-tauri/src/google_ai_studio_oauth.rs",
+              '''    if !is_waiting(app, attempt_id) {
+        return Err("The Google authorization was cancelled.".into());
+    }
+    let status = match outcome {
+''',
+              '''    let status = match outcome {
+''',
+          )
+          replace_once(
+              "src-tauri/src/google_ai_studio_oauth.rs",
+              '''    set_login_status(app, status);
+    Ok(())
+}
+''',
+              '''    let mut pending = app.pending_login.write();
+    if !pending
+        .as_ref()
+        .is_some_and(|login| login.attempt_id == attempt_id && login.status == "waiting")
+    {
+        return Err("The Google authorization was cancelled.".into());
+    }
+    *pending = Some(status);
+    Ok(())
+}
+''',
+          )
+
+          replace_once(
+              "src-tauri/src/grok_login.rs",
+              '''    let duplicate = state
+        .store
+''',
+              '''    if !is_waiting(&state, &attempt_id) {
+        let _ = window.destroy();
+        return;
+    }
+
+    let duplicate = state
+        .store
+''',
+          )
+          replace_once(
+              "src-tauri/src/grok_login.rs",
+              '''    if let Err(error) = save_provider_secret(
+''',
+              '''    if !is_waiting(&state, &attempt_id) {
+        let _ = window.destroy();
+        return;
+    }
+    if let Err(error) = save_provider_secret(
+''',
+          )
+          replace_once(
+              "src-tauri/src/grok_login.rs",
+              '''    *state.pending_login.write() = Some(LoginStatus {
+        attempt_id,
+        status: "complete".into(),
+        message: None,
+        account: Some(account),
+    });
+    let _ = window.destroy();
+''',
+              '''    let completed = {
+        let mut pending = state.pending_login.write();
+        if pending
+            .as_ref()
+            .is_some_and(|login| login.attempt_id == attempt_id && login.status == "waiting")
+        {
+            *pending = Some(LoginStatus {
+                attempt_id,
+                status: "complete".into(),
+                message: None,
+                account: Some(account),
+            });
+            true
+        } else {
+            false
+        }
+    };
+    if completed {
+        let _ = window.destroy();
+    }
+''',
+          )
+
+          replace_once(
+              "src-tauri/src/opencode_login.rs",
+              '''        Ok(account) => {
+            *state.pending_login.write() = Some(LoginStatus {
+                attempt_id,
+                status: "complete".into(),
+                message: None,
+                account: Some(account),
+            });
+            let _ = window.destroy();
+        }
+''',
+              '''        Ok(account) => {
+            let completed = {
+                let mut pending = state.pending_login.write();
+                if pending.as_ref().is_some_and(|login| {
+                    login.attempt_id == attempt_id && login.status == "waiting"
+                }) {
+                    *pending = Some(LoginStatus {
+                        attempt_id,
+                        status: "complete".into(),
+                        message: None,
+                        account: Some(account),
+                    });
+                    true
+                } else {
+                    false
+                }
+            };
+            if completed {
+                let _ = window.destroy();
+            }
+        }
+''',
+          )
+          PY
+          cargo fmt --manifest-path src-tauri/Cargo.toml
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Install frontend dependencies
+        run: npm install
+      - name: Validate frontend
+        run: |
+          npm run check
+          npm run build
+      - name: Commit race-safety changes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/src/grok_login.rs src-tauri/src/google_ai_studio_oauth.rs src-tauri/src/lib.rs src-tauri/src/oauth.rs src-tauri/src/opencode_login.rs
+          git commit -m "Prevent stale authentication completion after cancel"
+          git push origin HEAD:${{ github.head_ref }}
