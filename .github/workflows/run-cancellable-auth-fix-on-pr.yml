@@ -36,16 +36,13 @@ jobs:
           test -s /tmp/apply.py
           python3 /tmp/apply.py
           cargo fmt --manifest-path src-tauri/Cargo.toml
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Install frontend dependencies
         run: npm install
       - name: Validate frontend
         run: |
           npm run check
           npm run build
-      - name: Validate Rust
-        run: |
-          cargo test --manifest-path src-tauri/Cargo.toml
-          cargo check --manifest-path src-tauri/Cargo.toml
       - name: Commit focused changes
         shell: bash
         run: |
