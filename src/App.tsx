@@ -779,13 +779,28 @@ function AccountDashboardCard({
       const parsed = Number.parseFloat(value);
       return Number.isFinite(parsed) ? parsed : 0;
     };
+    const measurementCanvas = document.createElement("canvas");
+    const measurementContext = measurementCanvas.getContext("2d");
     const intrinsicWidth = (element: HTMLElement): number => {
       const style = window.getComputedStyle(element);
-      return Math.ceil(
-        Math.max(element.scrollWidth, element.getBoundingClientRect().width)
-          + numericStyle(style.marginLeft)
-          + numericStyle(style.marginRight),
-      );
+      let contentWidth = Math.max(element.scrollWidth, element.getBoundingClientRect().width);
+      if (measurementContext && element.matches("h2, .account-card-name-input")) {
+        const text = element instanceof HTMLInputElement ? element.value : element.textContent ?? "";
+        measurementContext.font = style.font || `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        const letterSpacing = numericStyle(style.letterSpacing);
+        contentWidth = measurementContext.measureText(text).width
+          + Math.max(0, text.length - 1) * letterSpacing
+          + numericStyle(style.paddingLeft)
+          + numericStyle(style.paddingRight)
+          + numericStyle(style.borderLeftWidth)
+          + numericStyle(style.borderRightWidth);
+      }
+      return Math.ceil(contentWidth + numericStyle(style.marginLeft) + numericStyle(style.marginRight));
+    };
+    const textIsCrowded = (element: HTMLElement): boolean => {
+      if (element.scrollWidth > element.clientWidth + 1) return true;
+      const lineHeight = numericStyle(window.getComputedStyle(element).lineHeight);
+      return lineHeight > 0 && element.scrollHeight > lineHeight * 1.6;
     };
 
     const measure = () => {
@@ -812,7 +827,7 @@ function AccountDashboardCard({
             || Array.from(metrics.querySelectorAll<HTMLElement>(".account-usage-metric")).some((metric) => {
               if (metric.scrollWidth > metric.clientWidth + 1) return true;
               return Array.from(metric.querySelectorAll<HTMLElement>(".metric-heading, .metric-full-value, .metric-reset"))
-                .some((element) => element.scrollWidth > element.clientWidth + 1);
+                .some(textIsCrowded);
             });
           if (detailedOverflow) {
             compactTriggerWidthRef.current = cardWidth;

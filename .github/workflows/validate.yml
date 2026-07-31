@@ -10,40 +10,6 @@ permissions:
   statuses: write
 
 jobs:
-  apply-account-card-measurement-correction:
-    if: github.event_name == 'pull_request' && github.head_ref == 'ai/content-driven-account-card-layout'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Apply focused measurement correction
-        run: python .github/scripts/fix-account-card-content-measurement.py
-      - run: npm install --package-lock=false
-      - run: npm run check
-      - run: npm run build
-      - name: Commit product-only correction
-        shell: bash
-        run: |
-          set -euo pipefail
-          git fetch origin main
-          rm -f package-lock.json tsconfig.app.tsbuildinfo tsconfig.node.tsbuildinfo
-          git checkout origin/main -- .github/workflows/validate.yml
-          rm .github/scripts/fix-account-card-content-measurement.py
-          rmdir .github/scripts 2>/dev/null || true
-          git add -A
-          git diff --cached --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "Measure account card content before compacting"
-          git push origin HEAD:${{ github.head_ref }}
-
   frontend:
     runs-on: ubuntu-latest
     steps:
