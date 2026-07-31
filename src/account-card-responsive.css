@@ -89,11 +89,11 @@
 
 /* Override the older viewport media rule unless measured overflow has selected compact mode. */
 .provider-account-card:not(.account-metrics-compact) .account-card-metrics .account-usage-metric {
-  display: block !important;
+  display: grid !important;
 }
 
 .provider-account-card:not(.account-metrics-compact) .account-card-metrics .metric-heading {
-  display: grid !important;
+  display: contents !important;
 }
 
 .provider-account-card:not(.account-metrics-compact) .account-card-metrics .metric-label,
@@ -102,9 +102,12 @@
 }
 
 .provider-account-card:not(.account-metrics-compact) .account-card-metrics .metric-full-value,
-.provider-account-card:not(.account-metrics-compact) .account-card-metrics .account-metric-track,
-.provider-account-card:not(.account-metrics-compact) .account-card-metrics .metric-reset {
+.provider-account-card:not(.account-metrics-compact) .account-card-metrics .account-metric-track {
   display: block !important;
+}
+
+.provider-account-card:not(.account-metrics-compact) .account-card-metrics .metric-reset {
+  display: grid !important;
 }
 
 .provider-account-card:not(.account-metrics-compact) .account-card-metrics .metric-compact-value {

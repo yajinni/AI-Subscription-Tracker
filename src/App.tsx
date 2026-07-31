@@ -826,7 +826,7 @@ function AccountDashboardCard({
           const detailedOverflow = metrics.scrollWidth > metrics.clientWidth + 1
             || Array.from(metrics.querySelectorAll<HTMLElement>(".account-usage-metric")).some((metric) => {
               if (metric.scrollWidth > metric.clientWidth + 1) return true;
-              return Array.from(metric.querySelectorAll<HTMLElement>(".metric-heading, .metric-full-value, .metric-reset"))
+              return Array.from(metric.querySelectorAll<HTMLElement>(".metric-label, .metric-window-pill, .metric-full-value, .metric-reset"))
                 .some(textIsCrowded);
             });
           if (detailedOverflow) {
