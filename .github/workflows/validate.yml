@@ -73,3 +73,61 @@ jobs:
             -f state="$state" \
             -f context="validate/desktop-${TARGET_OS}" \
             -f description="Rust tests, checks, and native icon generation on ${TARGET_OS}"
+
+  verify-release-v0-2-45:
+    if: github.event_name == 'pull_request' && github.head_ref == 'ai/verify-release-v0.2.45'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for complete v0.2.45 release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected=(
+            "AI.Subscription.Tracker_0.2.45_aarch64.app.tar.gz"
+            "AI.Subscription.Tracker_0.2.45_aarch64.app.tar.gz.sig"
+            "AI.Subscription.Tracker_0.2.45_aarch64.dmg"
+            "AI.Subscription.Tracker_0.2.45_x64-setup.exe"
+            "AI.Subscription.Tracker_0.2.45_x64-setup.exe.sig"
+            "AI.Subscription.Tracker_0.2.45_x64.app.tar.gz"
+            "AI.Subscription.Tracker_0.2.45_x64.app.tar.gz.sig"
+            "AI.Subscription.Tracker_0.2.45_x64.dmg"
+            "AI.Subscription.Tracker_0.2.45_x64_en-US.msi"
+            "AI.Subscription.Tracker_0.2.45_x64_en-US.msi.sig"
+            "latest.json"
+          )
+
+          for attempt in $(seq 1 40); do
+            if release_json=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v0.2.45" 2>/dev/null); then
+              missing=0
+              for asset in "${expected[@]}"; do
+                size=$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .size' <<<"$release_json" | head -n1)
+                if [ -z "$size" ] || [ "$size" = "null" ] || [ "$size" -le 0 ]; then
+                  missing=1
+                  echo "Waiting for non-empty asset: $asset"
+                fi
+              done
+              if [ "$missing" -eq 0 ]; then
+                echo "$release_json" > release.json
+                break
+              fi
+            else
+              echo "Waiting for v0.2.45 release object"
+            fi
+
+            if [ "$attempt" -eq 40 ]; then
+              echo "Release did not become complete in time" >&2
+              exit 1
+            fi
+            sleep 10
+          done
+
+          jq -r '.assets[] | [.name, (.size|tostring)] | @tsv' release.json
+          latest_url=$(jq -r '.assets[] | select(.name == "latest.json") | .browser_download_url' release.json)
+          curl --fail --location --retry 5 --retry-delay 3 "$latest_url" --output latest.json
+          test -s latest.json
+          jq -e '.version == "0.2.45"' latest.json
+          jq -e '.platforms | type == "object" and length >= 3' latest.json
+          jq -e '[.platforms[] | select((.url | type == "string" and length > 0) and (.signature | type == "string" and length > 0))] | length >= 3' latest.json
+          jq '{version, platforms}' latest.json
