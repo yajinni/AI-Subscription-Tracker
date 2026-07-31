@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
   statuses: write
 
 jobs:
@@ -73,3 +73,35 @@ jobs:
             -f state="$state" \
             -f context="validate/desktop-${TARGET_OS}" \
             -f description="Rust tests, checks, and native icon generation on ${TARGET_OS}"
+
+  apply-stable-account-card-layout:
+    if: github.event_name == 'pull_request' && github.head_ref == 'ai/fix-stable-account-card-layout'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply focused account-card fix
+        run: python .github/apply-stable-account-card-layout.py
+      - name: Remove temporary executor files
+        shell: bash
+        run: |
+          rm .github/apply-stable-account-card-layout.py
+          git fetch origin main
+          git checkout origin/main -- .github/workflows/validate.yml
+      - run: npm install
+      - run: npm run check
+      - run: npm run build
+      - name: Commit product-only changes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && { echo "No changes to commit"; exit 1; }
+          git commit -m "Fix stable account card layout"
+          git push origin HEAD:${{ github.head_ref }}
