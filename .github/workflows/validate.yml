@@ -86,11 +86,12 @@ jobs:
         with:
           node-version: 22
       - name: Apply focused account-card fix
-        run: python .github/apply-stable-account-card-layout.py
+        run: python .github/run-stable-account-card-layout.py
       - name: Remove temporary executor files
         shell: bash
         run: |
           rm .github/apply-stable-account-card-layout.py
+          rm .github/run-stable-account-card-layout.py
           git fetch origin main
           git checkout origin/main -- .github/workflows/validate.yml
       - run: npm install
