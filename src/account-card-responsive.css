@@ -1,4 +1,4 @@
-/* Account cards keep one unchanged structure at every width. */
+/* Account cards keep one stable, unchanged structure at every width. */
 .provider-account-card {
   min-height: max-content;
 }
