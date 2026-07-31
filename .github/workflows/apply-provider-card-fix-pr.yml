@@ -1,0 +1,37 @@
+name: Apply provider card fix on PR
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.head_ref == 'ai/fix-provider-card-layout-v2' && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ai/fix-provider-card-layout-v2
+          fetch-depth: 0
+
+      - name: Apply patch
+        run: python .github/apply-provider-card-fix.py
+
+      - name: Remove temporary files
+        run: |
+          rm .github/apply-provider-card-fix.py
+          rm .github/provider-card-fix-trigger
+          rm .github/workflows/apply-provider-card-fix.yml
+          rm .github/workflows/apply-provider-card-fix-pr.yml
+
+      - name: Commit product files
+        run: |
+          git config user.name yajinni
+          git config user.email yajinni@users.noreply.github.com
+          git add src/App.tsx src/obsidian-dashboard.css src/account-card-responsive.css src/ui-refinements.css CHANGELOG.md .github
+          git commit -m "Fix provider-specific account card layout"
+          git push origin HEAD:ai/fix-provider-card-layout-v2
